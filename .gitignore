@@ -1,0 +1,27 @@
+# Secrets
+.env
+
+# User data
+recordings/
+transcripts/
+notes/
+
+# Local config (users copy from .example)
+config.yaml
+
+# Build artifacts
+.build/
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Audio
+*.wav
+*.flac

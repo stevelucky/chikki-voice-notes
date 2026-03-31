@@ -1,0 +1,46 @@
+recording:
+  sample_rate: 16000
+  channels: 1
+  format: wav
+  max_duration_minutes: 120
+  recordings_dir: recordings
+
+transcription:
+  # Active engine: whisper | indicwhisper | parakeet
+  engine: whisper
+  language: en
+
+  engines:
+    whisper:
+      model: mlx-community/whisper-large-v3-turbo
+      description: "General-purpose, 99 languages, good Indian English"
+
+    indicwhisper:
+      model: ai4bharat/indicwhisper-large-v2
+      description: "Fine-tuned for Indian languages + Indian English, best for Hindi-English code-switching"
+
+    parakeet:
+      model: senstella/parakeet-mlx
+      description: "10x faster than Whisper, better noise robustness, English-only"
+
+processing:
+  # LLM provider: gemini | openai | anthropic
+  provider: gemini
+  # Model name for the chosen provider. Examples:
+  #   gemini:    gemini-2.5-flash, gemini-2.0-flash
+  #   openai:    gpt-4o, gpt-4o-mini
+  #   anthropic: claude-opus-4-6, claude-sonnet-4-6
+  model: gemini-2.5-flash
+  temperature: 0.3
+  # Default meeting type (run: python -m src.cli types)
+  default_type: default
+
+output:
+  notes_dir: notes
+  template: default
+
+menubar:
+  hotkey: command+shift+r
+  show_timer: true
+  sound_on_start: true
+  sound_on_stop: true
