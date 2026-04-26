@@ -10,6 +10,10 @@ transcription:
   engine: whisper
   language: en
 
+  # Speaker diarization (requires pyannote.audio and HF_TOKEN in .env)
+  diarization:
+    enabled: false
+
   engines:
     whisper:
       model: mlx-community/whisper-large-v3-turbo
@@ -24,12 +28,13 @@ transcription:
       description: "10x faster than Whisper, better noise robustness, English-only"
 
 processing:
-  # LLM provider: gemini | openai | anthropic
+  # LLM provider: gemini | openai | anthropic | ollama
   provider: gemini
   # Model name for the chosen provider. Examples:
   #   gemini:    gemini-2.5-flash, gemini-2.0-flash
   #   openai:    gpt-4o, gpt-4o-mini
   #   anthropic: claude-opus-4-6, claude-sonnet-4-6
+  #   ollama:    llama3, mistral
   model: gemini-2.5-flash
   temperature: 0.3
   # Default meeting type (run: python -m src.cli types)

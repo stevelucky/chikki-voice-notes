@@ -9,6 +9,9 @@ mlx-whisper>=0.4.0
 # Transcription - Parakeet MLX (optional)
 # parakeet-mlx>=0.2.0
 
+# Speaker Diarization (optional)
+# pyannote.audio>=3.1.0
+
 # Transcription - IndicWhisper fallback (optional, non-MLX)
 # transformers>=4.40.0
 # torch>=2.2.0

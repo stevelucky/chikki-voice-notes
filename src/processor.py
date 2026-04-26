@@ -14,6 +14,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 from datetime import datetime
 from .config import CONFIG
+import re
 
 _CHUNK_SECTION_PROMPT = """You are summarizing one section of a longer meeting transcript.
 
@@ -55,6 +56,15 @@ Rules:
 - Do not invent items. Only consolidate what's already in the section summaries."""
 
 
+
+_SPEAKER_ATTRIBUTION_INSTRUCTION = """SPEAKER ATTRIBUTION:
+The transcript includes anonymous speaker labels (Speaker_00, Speaker_01, etc.).
+If you can confidently infer a real name or role from the conversation — self-introductions ("I'm Mark from sales"), direct address by another speaker ("Mark, can you handle that?"), or distinctive role context ("as the controller, I..."), use the inferred name when attributing action items, decisions, or quotes in your output JSON.
+
+If the user has provided meeting context naming the attendees, prefer those names and try to map each Speaker_NN to one of them based on the conversation.
+
+If you cannot infer a name with high confidence, leave the label as Speaker_NN or use null in the owner field. NEVER GUESS names. Wrong attribution is worse than no attribution."""
+
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PROMPTS_PATH = os.path.join(_BASE_DIR, "prompts.json")
 
@@ -73,6 +83,10 @@ def available_types() -> dict:
 
 
 def _call_llm(provider: str, model: str, system_prompt: str, prompt: str, temperature: float) -> str:
+    # Auto-prepend speaker attribution when transcript has Speaker_NN labels
+    if re.search(r"Speaker_\d+", prompt):
+        system_prompt = _SPEAKER_ATTRIBUTION_INSTRUCTION + "\n\n" + system_prompt
+
     """Dispatch an LLM call to the configured provider. Returns raw response text."""
     if provider == "gemini":
         client = genai.Client()
@@ -111,9 +125,22 @@ def _call_llm(provider: str, model: str, system_prompt: str, prompt: str, temper
         )
         return response.content[0].text
 
+    elif provider == "ollama":
+        client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content
+
     else:
         raise ValueError(
-            f"Unknown LLM provider '{provider}'. Available: gemini, openai, anthropic"
+            f"Unknown LLM provider '{provider}'. Available: gemini, openai, anthropic, ollama"
         )
 
 

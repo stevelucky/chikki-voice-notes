@@ -103,8 +103,8 @@ def _clean_segments(segments: list) -> list:
 def format_transcript_text(transcript: dict) -> str:
     """Format transcript into readable paragraphs using segment timestamps.
 
-    Groups segments into paragraphs based on time gaps (>2s pause = new paragraph).
-    Adds timestamps every ~60s for navigation.
+    Groups segments into paragraphs based on time gaps (>2s pause = new paragraph)
+    or when the speaker changes. Adds timestamps every ~60s for navigation.
     """
     segments = transcript.get("segments", [])
     if not segments:
@@ -115,6 +115,7 @@ def format_transcript_text(transcript: dict) -> str:
     paragraphs = []
     current_para = []
     current_para_start = None
+    current_speaker = None
     last_end = 0.0
 
     for seg in segments:
@@ -124,16 +125,21 @@ def format_transcript_text(transcript: dict) -> str:
 
         start = seg.get("start", 0.0)
         end = seg.get("end", start)
+        speaker = seg.get("speaker")
 
-        # New paragraph on >2s gap
-        if current_para and (start - last_end) > 2.0:
+        # New paragraph on >2s gap or speaker change
+        if current_para and ((start - last_end) > 2.0 or speaker != current_speaker):
             ts = _format_ts(current_para_start or 0)
-            paragraphs.append(f"**[{ts}]** " + " ".join(current_para))
+            prefix = f"**[{ts}]** "
+            if current_speaker and current_speaker != "UNKNOWN":
+                prefix += f"**{current_speaker}:** "
+            paragraphs.append(prefix + " ".join(current_para))
             current_para = []
             current_para_start = None
 
         if current_para_start is None:
             current_para_start = start
+            current_speaker = speaker
 
         current_para.append(text)
         last_end = end
@@ -141,14 +147,20 @@ def format_transcript_text(transcript: dict) -> str:
         # Also break every ~60s for readability
         if current_para_start is not None and (end - current_para_start) > 60.0:
             ts = _format_ts(current_para_start)
-            paragraphs.append(f"**[{ts}]** " + " ".join(current_para))
+            prefix = f"**[{ts}]** "
+            if current_speaker and current_speaker != "UNKNOWN":
+                prefix += f"**{current_speaker}:** "
+            paragraphs.append(prefix + " ".join(current_para))
             current_para = []
             current_para_start = None
 
     # Flush remaining
     if current_para:
         ts = _format_ts(current_para_start or 0)
-        paragraphs.append(f"**[{ts}]** " + " ".join(current_para))
+        prefix = f"**[{ts}]** "
+        if current_speaker and current_speaker != "UNKNOWN":
+            prefix += f"**{current_speaker}:** "
+        paragraphs.append(prefix + " ".join(current_para))
 
     return "\n\n".join(paragraphs)
 

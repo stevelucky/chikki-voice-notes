@@ -158,7 +158,8 @@ def transcribe(audio_path, engine):
               help="Transcription engine (default: from config)")
 @click.option("--type", "-t", "meeting_type", default=None,
               help="Meeting type: default, standup, strategy, one_on_one, brainstorm, interview")
-def process(audio_path, context, slack, engine, meeting_type):
+@click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
+def process(audio_path, context, slack, engine, meeting_type, diarize):
     """Transcribe and process an audio file into structured notes."""
     from .transcriber import Transcriber
     from .processor import Processor
@@ -178,6 +179,14 @@ def process(audio_path, context, slack, engine, meeting_type):
 
     with live_timer("Cleaning transcript"):
         transcript = clean_transcript(transcript)
+
+    do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
+    if do_diarize:
+        from .diarizer import Diarizer, merge_diarization
+        with live_timer("Diarizing speakers"):
+            d = Diarizer()
+            speaker_segments = d.diarize(audio_path)
+            transcript = merge_diarization(transcript, speaker_segments)
 
     p = Processor(meeting_type=meeting_type)
     with live_timer(f"Extracting notes ({p.type_name}) via {CONFIG['processing']['model']}"):
@@ -212,7 +221,8 @@ def process(audio_path, context, slack, engine, meeting_type):
 @click.option("--type", "-t", "meeting_type", default=None,
               help="Meeting type: default, standup, strategy, one_on_one, brainstorm, interview")
 @click.option("--length", type=click.Choice(["short","medium","long","open"]), default=None, help="Meeting length. Long enables 30-min chunked summarization.")
-def quick(context, slack, duration, engine, meeting_type, length):
+@click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
+def quick(context, slack, duration, engine, meeting_type, length, diarize):
     """Record, transcribe, and process in one go. Ctrl+C to stop recording."""
     from .recorder import Recorder
     from .transcriber import Transcriber
@@ -262,6 +272,14 @@ def quick(context, slack, duration, engine, meeting_type, length):
 
     with live_timer("Cleaning transcript"):
         transcript = clean_transcript(transcript)
+
+    do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
+    if do_diarize:
+        from .diarizer import Diarizer, merge_diarization
+        with live_timer("Diarizing speakers"):
+            d = Diarizer()
+            speaker_segments = d.diarize(audio_path)
+            transcript = merge_diarization(transcript, speaker_segments)
 
     p = Processor(meeting_type=meeting_type)
     _strategy = _resolve_length(length, transcript.get("segments"))
@@ -372,7 +390,8 @@ def menubar():
 
 @cli.command("process-latest")
 @click.option("--engine", "-e", type=click.Choice(["whisper", "indicwhisper", "parakeet"]), default=None)
-def process_latest(engine):
+@click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
+def process_latest(engine, diarize):
     """Process the most recent recording. Used by the menu bar app."""
     import json as _json
     from .transcriber import Transcriber
@@ -408,7 +427,17 @@ def process_latest(engine):
     t0 = time.time()
     t = Transcriber(engine=engine)
     transcript = t.transcribe(audio_path)
+    
     transcript = clean_transcript(transcript)
+    
+    do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
+    if do_diarize:
+        stage("diarizing", "Running pyannote pipeline...")
+        from .diarizer import Diarizer, merge_diarization
+        d = Diarizer()
+        speaker_segments = d.diarize(audio_path)
+        transcript = merge_diarization(transcript, speaker_segments)
+        
     t1 = time.time()
 
     stage("processing", f"Transcribed in {t1 - t0:.1f}s — sending to LLM")
