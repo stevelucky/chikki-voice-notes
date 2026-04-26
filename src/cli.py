@@ -11,6 +11,25 @@ import click
 
 from .config import CONFIG
 
+def _resolve_length(length, segments=None):
+    """Map user-provided length (or audio duration) to processing strategy.
+    Returns 'chunked' or 'single'.
+
+    Default: auto-detect from audio duration. 90+ min -> chunked.
+    Override: --length long forces chunked, --length short/medium forces single."""
+    if length == "long":
+        return "chunked"
+    if length in ("short", "medium"):
+        return "single"
+    # length is None or "open" -> auto-decide from segments
+    if segments:
+        last_end = segments[-1].get("end", 0)
+        if last_end >= 90 * 60:
+            return "chunked"
+    return "single"
+
+
+
 
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -192,7 +211,8 @@ def process(audio_path, context, slack, engine, meeting_type):
               help="Transcription engine (default: from config)")
 @click.option("--type", "-t", "meeting_type", default=None,
               help="Meeting type: default, standup, strategy, one_on_one, brainstorm, interview")
-def quick(context, slack, duration, engine, meeting_type):
+@click.option("--length", type=click.Choice(["short","medium","long","open"]), default=None, help="Meeting length. Long enables 30-min chunked summarization.")
+def quick(context, slack, duration, engine, meeting_type, length):
     """Record, transcribe, and process in one go. Ctrl+C to stop recording."""
     from .recorder import Recorder
     from .transcriber import Transcriber
@@ -244,8 +264,14 @@ def quick(context, slack, duration, engine, meeting_type):
         transcript = clean_transcript(transcript)
 
     p = Processor(meeting_type=meeting_type)
+    _strategy = _resolve_length(length, transcript.get("segments"))
+    _last_end = transcript.get("segments", [{}])[-1].get("end", 0) if transcript.get("segments") else 0
+    click.echo(f"  [duration={_last_end/60:.1f}min, override={length or 'auto'}, strategy={_strategy}]")
     with live_timer(f"Extracting notes ({p.type_name}) via {CONFIG['processing']['model']}"):
-        processed = p.process(transcript["text"], context=context)
+        if _strategy == "chunked":
+            processed = p.process_chunked(transcript, context=context)
+        else:
+            processed = p.process(transcript["text"], context=context)
 
     with live_timer("Saving note + compressing audio"):
         note_path = write_note(processed, transcript, audio_path, rec_duration)
