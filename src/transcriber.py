@@ -84,15 +84,20 @@ def _transcribe_indicwhisper(audio_path: str, model: str, language: str) -> dict
 def _transcribe_parakeet(audio_path: str, model: str, language: str) -> dict:
     """Parakeet MLX — NVIDIA's ASR model ported to Apple Silicon.
 
-    Uses the parakeet-mlx package (pip install parakeet-mlx).
+    Updated for parakeet-mlx 0.x API: from_pretrained() + model.transcribe().
     """
-    from parakeet_mlx import transcribe as pk_transcribe
+    from parakeet_mlx import from_pretrained
 
-    result = pk_transcribe(audio_path)
-    text = result if isinstance(result, str) else result.get("text", str(result))
+    pk_model = from_pretrained(model)
+    result = pk_model.transcribe(audio_path)
+    sentences = getattr(result, "sentences", None) or []
+    segments = [
+        {"start": s.start, "end": s.end, "text": s.text}
+        for s in sentences
+    ]
     return {
-        "text": text.strip(),
-        "segments": [],
+        "text": result.text.strip(),
+        "segments": segments,
         "language": "en",  # Parakeet is English-only
     }
 
