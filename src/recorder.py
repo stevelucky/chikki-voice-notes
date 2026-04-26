@@ -5,6 +5,7 @@ Writes audio incrementally to disk so data is never lost on crash/force-kill.
 
 import atexit
 import os
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -31,6 +32,7 @@ class Recorder:
         self._lock = threading.Lock()
         self._file = None
         self._filepath = None
+        self._caffeinate = None
 
     @property
     def is_recording(self):
@@ -80,6 +82,16 @@ class Recorder:
             self._recording = True
             self._start_time = time.time()
 
+            # Prevent macOS from sleeping while recording
+            try:
+                self._caffeinate = subprocess.Popen(
+                    ["caffeinate", "-dimsu"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                self._caffeinate = None
+
             # Ensure we save on unexpected exit
             atexit.register(self._emergency_save)
 
@@ -101,6 +113,17 @@ class Recorder:
             if self._file is not None:
                 self._file.close()
                 self._file = None
+
+            if self._caffeinate is not None:
+                try:
+                    self._caffeinate.terminate()
+                    self._caffeinate.wait(timeout=2)
+                except Exception:
+                    try:
+                        self._caffeinate.kill()
+                    except Exception:
+                        pass
+                self._caffeinate = None
 
             try:
                 atexit.unregister(self._emergency_save)
@@ -127,6 +150,12 @@ class Recorder:
                 self._file.close()
                 self._file = None
                 print(f"\n[recorder] Emergency save: {self._filepath}")
+            if self._caffeinate is not None:
+                try:
+                    self._caffeinate.terminate()
+                except Exception:
+                    pass
+                self._caffeinate = None
         except Exception:
             pass
 
