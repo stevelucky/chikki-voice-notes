@@ -250,9 +250,13 @@ def quick(context, slack, duration, engine, meeting_type, length, diarize):
                 break
             stopped.wait(0.5)
     finally:
-        signal.signal(signal.SIGINT, old_handler)
+        # Block further Ctrl+C until post-processing completes. A second
+        # Ctrl+C here would kill transcription/diarization/summary mid-flight
+        # and we'd lose the meeting note even though the audio is on disk.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     click.echo()
+    click.echo(click.style("Stopping recording... (Ctrl+C disabled — processing in progress)", fg="yellow"))
     audio_path = rec.stop()
     if not audio_path:
         click.echo("No audio recorded.")
