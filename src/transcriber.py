@@ -89,7 +89,7 @@ def _transcribe_parakeet(audio_path: str, model: str, language: str) -> dict:
     from parakeet_mlx import from_pretrained
 
     pk_model = from_pretrained(model)
-    result = pk_model.transcribe(audio_path)
+    result = pk_model.transcribe(audio_path, chunk_duration=120.0, overlap_duration=10.0)
     sentences = getattr(result, "sentences", None) or []
     segments = [
         {"start": s.start, "end": s.end, "text": s.text}

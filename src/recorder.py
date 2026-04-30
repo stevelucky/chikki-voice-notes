@@ -6,6 +6,7 @@ Writes audio incrementally to disk so data is never lost on crash/force-kill.
 import atexit
 import os
 import subprocess
+import queue
 import threading
 import time
 from datetime import datetime
@@ -33,6 +34,9 @@ class Recorder:
         self._file = None
         self._filepath = None
         self._caffeinate = None
+        self._write_queue = None
+        self._writer_thread = None
+        self._stop_writer = threading.Event()
 
     @property
     def is_recording(self):
@@ -49,10 +53,28 @@ class Recorder:
         return self._filepath
 
     def _callback(self, indata, frames, time_info, status):
+        # Audio thread: enqueue only, never block on disk I/O.
+        # Writes happen on self._writer_loop on a dedicated Python thread.
         if status:
             print(f"[recorder] {status}")
-        if self._file is not None:
-            self._file.write(indata.copy())
+        if self._write_queue is not None:
+            self._write_queue.put(indata.copy())
+
+    def _writer_loop(self):
+        while True:
+            try:
+                chunk = self._write_queue.get(timeout=0.1)
+            except queue.Empty:
+                if self._stop_writer.is_set():
+                    break
+                continue
+            try:
+                if self._file is not None:
+                    self._file.write(chunk)
+            except Exception as e:
+                print(f"[recorder] writer error: {e}")
+            finally:
+                self._write_queue.task_done()
 
     def start(self):
         with self._lock:
@@ -71,6 +93,13 @@ class Recorder:
                 format="WAV",
                 subtype="FLOAT",
             )
+
+            # Start the writer thread before the audio stream so the queue
+            # is being drained from frame 1.
+            self._write_queue = queue.Queue()
+            self._stop_writer.clear()
+            self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+            self._writer_thread.start()
 
             self._stream = sd.InputStream(
                 samplerate=self._sample_rate,
@@ -102,6 +131,8 @@ class Recorder:
             if not self._recording:
                 return None
             self._recording = False
+            # Stop the audio stream first. Callback now does no I/O so this
+            # returns quickly without GIL contention.
             self._stream.stop()
             self._stream.close()
             self._stream = None
@@ -109,6 +140,13 @@ class Recorder:
             filepath = self._filepath
             duration = time.time() - self._start_time if self._start_time else 0
             self._start_time = None
+
+            # Drain the writer thread before closing the file.
+            self._stop_writer.set()
+            if self._writer_thread is not None:
+                self._writer_thread.join(timeout=10)
+                self._writer_thread = None
+            self._write_queue = None
 
             if self._file is not None:
                 self._file.close()
