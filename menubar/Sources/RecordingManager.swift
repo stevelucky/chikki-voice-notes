@@ -14,17 +14,53 @@ class RecordingManager: ObservableObject {
     @Published var processingDetail: String = ""
     @Published var processingElapsed: Int = 0
     @Published var completedStages: Set<String> = []
+    @Published var projectDir: String
+    @Published var llmProvider: String = "LLM"
+    @Published var lastError: String?
 
     private var recordProcess: Process?
     private var timer: Timer?
     private var processingTimer: Timer?
 
-    let projectDir: String
     private let condaEnv = "chikki"
+    private static let projectDirKey = "projectDir"
 
     private init() {
-        projectDir = Self.resolveProjectDir()
+        if let saved = UserDefaults.standard.string(forKey: Self.projectDirKey),
+           FileManager.default.fileExists(atPath: saved + "/config.yaml") {
+            projectDir = saved
+        } else {
+            let resolved = Self.resolveProjectDir()
+            projectDir = resolved
+            UserDefaults.standard.set(resolved, forKey: Self.projectDirKey)
+        }
         requestNotificationPermission()
+        llmProvider = Self.readLLMProvider(from: projectDir)
+    }
+
+    func saveProjectDir(_ path: String) {
+        UserDefaults.standard.set(path, forKey: Self.projectDirKey)
+        projectDir = path
+        llmProvider = Self.readLLMProvider(from: path)
+    }
+
+    private static func readLLMProvider(from dir: String) -> String {
+        let configPath = "\(dir)/config.yaml"
+        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else { return "LLM" }
+        for line in contents.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("provider:") {
+                let value = trimmed.replacingOccurrences(of: "provider:", with: "").trimmingCharacters(in: .whitespaces)
+                switch value {
+                case "anthropic": return "Claude"
+                case "gemini":    return "Gemini"
+                case "openai":    return "OpenAI"
+                case "ollama":    return "Ollama"
+                default:          return value
+                }
+            }
+        }
+        return "LLM"
     }
 
     private static func resolveProjectDir() -> String {
@@ -40,10 +76,17 @@ class RecordingManager: ObservableObject {
             dir = dir.deletingLastPathComponent()
         }
 
-        let fallback = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("codes/chikki").path
-        if FileManager.default.fileExists(atPath: fallback + "/config.yaml") {
-            return fallback
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let fallbacks = [
+            "\(home)/chikki-voice-notes",
+            "\(home)/chikki",
+            "\(home)/codes/chikki",
+            "\(home)/Documents/chikki",
+        ]
+        for path in fallbacks {
+            if FileManager.default.fileExists(atPath: path + "/config.yaml") {
+                return path
+            }
         }
 
         return appParent
@@ -78,7 +121,8 @@ class RecordingManager: ObservableObject {
 
         if let proc = recordProcess, proc.isRunning {
             proc.interrupt()
-            proc.waitUntilExit()
+            // Wait off the main thread so we don't freeze the UI
+            await Task.detached { proc.waitUntilExit() }.value
         }
         recordProcess = nil
 
@@ -96,36 +140,46 @@ class RecordingManager: ObservableObject {
         processingDetail = ""
         processingElapsed = 0
         completedStages = []
+        lastError = nil
 
-        // Start processing timer
         processingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.processingElapsed += 1
             }
         }
 
-        // Run off main thread, streaming stderr for stage updates
-        let result: String? = await Task.detached { [self] in
-            return self.runProcessLatestWithProgress()
+        let capturedProjectDir = projectDir
+        let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
+
+        let (output, exitCode, stderrLog) = await Task.detached { [self] in
+            return self.runProcessLatestWithProgress(projectDir: capturedProjectDir, diarize: capturedDiarize)
         }.value
 
         processingTimer?.invalidate()
         processingTimer = nil
         isProcessing = false
 
-        if let result = result, !result.isEmpty {
-            lastNote = result
-            sendNotification(title: "Chikki: Note Saved", body: result)
+        if exitCode == 0, let output, !output.isEmpty {
+            lastError = nil
+            lastNote = output
+            sendNotification(title: "Chikki: Note Saved", body: output)
         } else {
-            sendNotification(title: "Chikki", body: "Processing failed. Try: python -m src.cli process-latest")
+            // Surface the last meaningful stderr line as the error
+            let errorLine = stderrLog
+                .components(separatedBy: .newlines)
+                .filter { !$0.hasPrefix("{") && !$0.isEmpty }
+                .last ?? "Unknown error (exit \(exitCode))"
+            lastError = errorLine
+            sendNotification(title: "Chikki: Processing Failed", body: errorLine)
         }
     }
 
-    /// Runs process-latest and streams stderr for stage markers
-    nonisolated private func runProcessLatestWithProgress() -> String? {
+    /// Runs process-latest, streams stderr for stage markers, returns (stdout, exitCode, fullStderr).
+    nonisolated private func runProcessLatestWithProgress(projectDir: String, diarize: Bool) -> (String?, Int32, String) {
         let condaBase = Self.findCondaBase()
-        let python = "\(condaBase)/envs/granola/bin/python"
-        let cmd = "cd \"\(projectDir)\" && \"\(python)\" -m src.cli process-latest"
+        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
+        let diarizeFlag = diarize ? "--diarize" : "--no-diarize"
+        let cmd = "cd \"\(projectDir)\" && \"\(python)\" -m src.cli process-latest \(diarizeFlag)"
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -133,7 +187,11 @@ class RecordingManager: ObservableObject {
         process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
 
         var env = ProcessInfo.processInfo.environment
-        if let dotenvVars = loadDotEnvSync() {
+        // Prepend Homebrew and conda bin dirs so tools like ffmpeg are found
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = extraPaths.joined(separator: ":") + ":" + existingPath
+        if let dotenvVars = loadDotEnvSync(projectDir: projectDir) {
             env.merge(dotenvVars) { _, new in new }
         }
         process.environment = env
@@ -143,45 +201,61 @@ class RecordingManager: ObservableObject {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        // Read stderr line-by-line for stage markers
+        var stderrLines: [String] = []
+        let stderrLock = NSLock()
+
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty,
-                  let line = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !line.isEmpty else { return }
+                  let chunk = String(data: data, encoding: .utf8) else { return }
 
-            // Try to parse JSON stage markers
-            for part in line.components(separatedBy: .newlines) {
-                guard let jsonData = part.data(using: .utf8),
+            for line in chunk.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+
+                stderrLock.lock()
+                stderrLines.append(trimmed)
+                stderrLock.unlock()
+
+                // Parse JSON stage markers
+                guard let jsonData = trimmed.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
                       let stage = obj["stage"] as? String else { continue }
 
                 let detail = obj["detail"] as? String ?? ""
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
-                    // Mark previous stage as completed
                     let stageOrder = ["transcribing", "processing", "saving", "done"]
                     if let idx = stageOrder.firstIndex(of: stage), idx > 0 {
-                        for i in 0..<idx {
-                            self.completedStages.insert(stageOrder[i])
-                        }
+                        for i in 0..<idx { self.completedStages.insert(stageOrder[i]) }
                     }
-                    if stage == "done" {
-                        self.completedStages.insert("saving")
-                    }
+                    if stage == "done" { self.completedStages.insert("saving") }
                     self.processingStage = stage
                     self.processingDetail = detail
                 }
             }
         }
 
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            return (nil, -1, "Failed to launch process: \(error.localizedDescription)")
+        }
         process.waitUntilExit()
-
         errPipe.fileHandleForReading.readabilityHandler = nil
 
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Drain any remaining stderr
+        let remaining = errPipe.fileHandleForReading.readDataToEndOfFile()
+        if let s = String(data: remaining, encoding: .utf8), !s.isEmpty {
+            stderrLock.lock()
+            stderrLines.append(contentsOf: s.components(separatedBy: .newlines).filter { !$0.isEmpty })
+            stderrLock.unlock()
+        }
+
+        let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderrLog = stderrLines.joined(separator: "\n")
+        return (stdout, process.terminationStatus, stderrLog)
     }
 
     // MARK: - Folder Access
@@ -218,6 +292,9 @@ class RecordingManager: ObservableObject {
         process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
 
         var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = extraPaths.joined(separator: ":") + ":" + existingPath
         if let dotenvVars = loadDotEnv() {
             env.merge(dotenvVars) { _, new in new }
         }
@@ -238,7 +315,7 @@ class RecordingManager: ObservableObject {
         return Self.parseDotEnv(at: "\(projectDir)/.env")
     }
 
-    nonisolated private func loadDotEnvSync() -> [String: String]? {
+    nonisolated private func loadDotEnvSync(projectDir: String) -> [String: String]? {
         return Self.parseDotEnv(at: "\(projectDir)/.env")
     }
 
@@ -268,6 +345,7 @@ class RecordingManager: ObservableObject {
             "\(home)/miniconda3",
             "\(home)/anaconda3",
             "\(home)/miniforge3",
+            "/opt/homebrew/Caskroom/miniforge/base",
             "/opt/homebrew/Caskroom/miniconda/base",
         ]
         for path in candidates {

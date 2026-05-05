@@ -168,12 +168,9 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     # Formatted transcript (collapsed)
     from .cleaner import format_transcript_text
     formatted = format_transcript_text(transcript)
-    lines.append("<details>")
-    lines.append("<summary>Transcript</summary>")
-    lines.append("")
-    lines.append(formatted)
-    lines.append("")
-    lines.append("</details>")
+    lines.append("> [!note]- Transcript")
+    for line in formatted.splitlines():
+        lines.append(f"> {line}" if line else ">")
 
     content = "\n".join(lines) + "\n"
     with open(filepath, "w") as fh:

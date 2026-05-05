@@ -40,7 +40,7 @@ struct MenuBarView: View {
                         state: recorder.stepState(for: "transcribing")
                     )
                     ProcessingStepView(
-                        label: "Extracting notes (Gemini)",
+                        label: "Extracting notes (\(recorder.llmProvider))",
                         state: recorder.stepState(for: "processing")
                     )
                     ProcessingStepView(
@@ -68,7 +68,20 @@ struct MenuBarView: View {
 
             Divider()
 
-            if let lastNote = recorder.lastNote, !lastNote.isEmpty {
+            if let error = recorder.lastError {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Processing failed:")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(4)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                Divider()
+            } else if let lastNote = recorder.lastNote, !lastNote.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Last note:")
                         .font(.caption2)
@@ -79,7 +92,6 @@ struct MenuBarView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
-
                 Divider()
             }
 
@@ -93,9 +105,10 @@ struct MenuBarView: View {
 
             Divider()
 
-            SettingsLink {
-                Text("Settings...")
+            Button("Settings...") {
+                SettingsWindowController.shared.show()
             }
+            .keyboardShortcut(",")
 
             Button("Quit Chikki") {
                 NSApplication.shared.terminate(nil)
