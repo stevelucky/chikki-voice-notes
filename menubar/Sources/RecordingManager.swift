@@ -78,7 +78,7 @@ class RecordingManager: ObservableObject {
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let fallbacks = [
-            "\(home)/chikki-voice-notes",
+            "\(home)/scribe-notes",
             "\(home)/chikki",
             "\(home)/codes/chikki",
             "\(home)/Documents/chikki",
@@ -112,7 +112,7 @@ class RecordingManager: ObservableObject {
             }
         }
 
-        sendNotification(title: "Chikki", body: "Recording started. Press Cmd+Shift+R to stop.")
+        sendNotification(title: "Scribe", body: "Recording started. Press Cmd+Shift+R to stop.")
         recordProcess = runCLI(args: ["record", "--duration", "0"], background: true)
     }
 
@@ -130,11 +130,48 @@ class RecordingManager: ObservableObject {
         timer = nil
         isRecording = false
 
-        sendNotification(title: "Chikki", body: "Recording stopped. Processing...")
+        sendNotification(title: "Scribe", body: "Recording stopped. Processing...")
         await processLatest()
     }
 
     func processLatest() async {
+        let capturedProjectDir = projectDir
+        let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
+        let condaBase = Self.findCondaBase()
+        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
+        let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
+        let cmd = "cd \"\(capturedProjectDir)\" && \"\(python)\" -m src.cli process-latest \(diarizeFlag)"
+        await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
+    }
+
+    func pickAndProcessAudioFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio, .wav, .mp3, .mpeg4Audio]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Process"
+        panel.message = "Select a recording to transcribe and process"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            Task { @MainActor in
+                await self.processAudioFile(at: url.path)
+            }
+        }
+    }
+
+    func processAudioFile(at path: String) async {
+        let capturedProjectDir = projectDir
+        let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
+        let condaBase = Self.findCondaBase()
+        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
+        let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
+        let escapedPath = path.replacingOccurrences(of: "\"", with: "\\\"")
+        let cmd = "cd \"\(capturedProjectDir)\" && \"\(python)\" -m src.cli process \"\(escapedPath)\" \(diarizeFlag)"
+        await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
+    }
+
+    private func runPipeline(cmd: String, projectDir: String) async {
         isProcessing = true
         processingStage = ""
         processingDetail = ""
@@ -149,10 +186,8 @@ class RecordingManager: ObservableObject {
         }
 
         let capturedProjectDir = projectDir
-        let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
-
         let (output, exitCode, stderrLog) = await Task.detached { [self] in
-            return self.runProcessLatestWithProgress(projectDir: capturedProjectDir, diarize: capturedDiarize)
+            return self.runSubprocessWithProgress(cmd: cmd, projectDir: capturedProjectDir)
         }.value
 
         processingTimer?.invalidate()
@@ -162,24 +197,19 @@ class RecordingManager: ObservableObject {
         if exitCode == 0, let output, !output.isEmpty {
             lastError = nil
             lastNote = output
-            sendNotification(title: "Chikki: Note Saved", body: output)
+            sendNotification(title: "Scribe: Note Saved", body: output)
         } else {
-            // Surface the last meaningful stderr line as the error
             let errorLine = stderrLog
                 .components(separatedBy: .newlines)
                 .filter { !$0.hasPrefix("{") && !$0.isEmpty }
                 .last ?? "Unknown error (exit \(exitCode))"
             lastError = errorLine
-            sendNotification(title: "Chikki: Processing Failed", body: errorLine)
+            sendNotification(title: "Scribe: Processing Failed", body: errorLine)
         }
     }
 
-    /// Runs process-latest, streams stderr for stage markers, returns (stdout, exitCode, fullStderr).
-    nonisolated private func runProcessLatestWithProgress(projectDir: String, diarize: Bool) -> (String?, Int32, String) {
-        let condaBase = Self.findCondaBase()
-        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
-        let diarizeFlag = diarize ? "--diarize" : "--no-diarize"
-        let cmd = "cd \"\(projectDir)\" && \"\(python)\" -m src.cli process-latest \(diarizeFlag)"
+    /// Runs a pipeline command, streams stderr for stage markers, returns (stdout, exitCode, fullStderr).
+    nonisolated private func runSubprocessWithProgress(cmd: String, projectDir: String) -> (String?, Int32, String) {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")

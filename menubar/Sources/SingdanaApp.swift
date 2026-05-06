@@ -7,7 +7,7 @@ extension KeyboardShortcuts.Name {
 }
 
 @main
-struct ChikkiApp: App {
+struct ScribeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var recorder = RecordingManager.shared
 
@@ -59,7 +59,7 @@ class SettingsWindowController {
         if window == nil {
             let controller = NSHostingController(rootView: SettingsView())
             let win = NSWindow(contentViewController: controller)
-            win.title = "Chikki Settings"
+            win.title = "Scribe Settings"
             win.styleMask = [.titled, .closable, .miniaturizable]
             win.setContentSize(NSSize(width: 440, height: 420))
             win.center()

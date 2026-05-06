@@ -44,7 +44,8 @@ def _compress_audio(wav_path: str):
 
     flac_path = wav_path.rsplit(".", 1)[0] + ".flac"
     if os.path.exists(flac_path):
-        return  # Already compressed
+        os.remove(wav_path)  # FLAC exists but WAV wasn't cleaned up — remove it now
+        return
 
     if not shutil.which("ffmpeg"):
         return  # ffmpeg not available
@@ -161,6 +162,12 @@ def transcribe(audio_path, engine):
 @click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
 def process(audio_path, context, slack, engine, meeting_type, diarize):
     """Transcribe and process an audio file into structured notes."""
+    import json as _json
+    import sys as _sys
+
+    def stage(name, detail=""):
+        print(_json.dumps({"stage": name, "detail": detail}), file=_sys.stderr, flush=True)
+
     from .transcriber import Transcriber
     from .processor import Processor
     from .output import write_note, format_slack_message
@@ -174,6 +181,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
     from .cleaner import clean_transcript
 
     t = Transcriber(engine=engine)
+    stage("transcribing", f"{dur_str} audio")
     with live_timer(f"Transcribing ({engine_name}, {dur_str} audio)"):
         transcript = t.transcribe(audio_path)
 
@@ -189,15 +197,20 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
             transcript = merge_diarization(transcript, speaker_segments)
 
     p = Processor(meeting_type=meeting_type)
+    stage("processing")
     with live_timer(f"Extracting notes ({p.type_name}) via {CONFIG['processing']['model']}"):
         processed = p.process(transcript["text"], context=context)
 
+    stage("saving")
     with live_timer("Saving note + compressing audio"):
         note_path = write_note(processed, transcript, audio_path, audio_dur)
         _compress_audio(audio_path)
 
-    click.echo(click.style(f"\nTitle: {processed.get('title', 'N/A')}", fg="cyan", bold=True))
-    click.echo(f"Summary: {processed.get('summary', 'N/A')}")
+    stage("done")
+    title = processed.get('title', 'N/A')
+    summary = processed.get('summary', 'N/A')
+    click.echo(click.style(f"\nTitle: {title}", fg="cyan", bold=True))
+    click.echo(f"Summary: {summary}")
 
     action_items = processed.get("action_items", [])
     if action_items:
@@ -206,6 +219,8 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
             click.echo(f"  - [{item.get('owner', '?')}] {item.get('task', '')}")
 
     click.echo(click.style(f"\nNote saved: {note_path}", fg="green"))
+    # Print summary to stdout for the menu bar app to capture
+    print(summary)
 
     if slack:
         msg = format_slack_message(processed, note_path)
@@ -460,7 +475,7 @@ def process_latest(engine, diarize):
     total = time.time() - t0
 
     stage("done", f"Total: {total:.1f}s")
-    click.echo(f"{title} | {action_count} action items | {os.path.basename(note_path)}")
+    print(processed.get("summary", title))
 
 
 @cli.command()

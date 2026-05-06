@@ -3,20 +3,22 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>Chikki</string>
+    <string>Scribe</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSUIElement</key>
     <true/>
     <key>CFBundleName</key>
-    <string>Chikki</string>
+    <string>Scribe</string>
     <key>CFBundleIdentifier</key>
-    <string>com.local.chikki</string>
+    <string>com.local.scribe</string>
+    <key>CFBundleIconFile</key>
+    <string>Scribe</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Chikki needs microphone access to record voice notes and meetings.</string>
+    <string>Scribe needs microphone access to record voice notes and meetings.</string>
 </dict>
 </plist>

@@ -64,6 +64,10 @@ struct MenuBarView: View {
                     Task { await recorder.startRecording() }
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                Button("Process Audio File...") {
+                    recorder.pickAndProcessAudioFile()
+                }
             }
 
             Divider()
@@ -89,9 +93,11 @@ struct MenuBarView: View {
                     Text(lastNote)
                         .font(.caption)
                         .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
+                .frame(maxWidth: 260, alignment: .leading)
                 Divider()
             }
 
@@ -110,7 +116,7 @@ struct MenuBarView: View {
             }
             .keyboardShortcut(",")
 
-            Button("Quit Chikki") {
+            Button("Quit Scribe") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q")
@@ -131,25 +137,30 @@ struct ProcessingStepView: View {
     let state: StepState
 
     var body: some View {
-        HStack(spacing: 6) {
-            Group {
-                switch state {
-                case .pending:
-                    Image(systemName: "circle")
-                        .foregroundStyle(.quaternary)
-                case .active:
-                    ProgressView()
-                        .controlSize(.mini)
-                case .done:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-            }
-            .frame(width: 14, height: 14)
-
+        HStack(alignment: .center, spacing: 6) {
+            icon
+                .frame(width: 14, height: 14)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(state == .pending ? .secondary : .primary)
+        }
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch state {
+        case .pending:
+            Image(systemName: "circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.quaternary)
+        case .active:
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.8)
+        case .done:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.green)
         }
     }
 }

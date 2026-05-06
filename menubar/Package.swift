@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "ChikkiApp",
+    name: "ScribeApp",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.0.0"),
     ],
     targets: [
         .executableTarget(
-            name: "ChikkiApp",
+            name: "ScribeApp",
             dependencies: ["KeyboardShortcuts"],
             path: "Sources",
             exclude: ["Info.plist"]
