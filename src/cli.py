@@ -78,7 +78,7 @@ def live_timer(label: str):
         while not stop.is_set():
             elapsed = time.time() - start
             m, s = divmod(int(elapsed), 60)
-            click.echo(f"\r  {_SPINNER[i % len(_SPINNER)]} {label}  {m:02d}:{s:02d}", nl=False)
+            click.echo(f"\r  {_SPINNER[i % len(_SPINNER)]} {label}  {m:02d}:{s:02d}", nl=False, err=True)
             i += 1
             stop.wait(0.1)
 
@@ -92,7 +92,7 @@ def live_timer(label: str):
         result["elapsed"] = time.time() - start
         elapsed = result["elapsed"]
         m, s = divmod(int(elapsed), 60)
-        click.echo(f"\r  ✓ {label}  {m:02d}:{s:02d}  ({elapsed:.1f}s)")
+        click.echo(f"\r  ✓ {label}  {m:02d}:{s:02d}  ({elapsed:.1f}s)", err=True)
 
 
 @click.group()
@@ -209,18 +209,18 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
     stage("done")
     title = processed.get('title', 'N/A')
     summary = processed.get('summary', 'N/A')
-    click.echo(click.style(f"\nTitle: {title}", fg="cyan", bold=True))
-    click.echo(f"Summary: {summary}")
+    click.echo(click.style(f"\nTitle: {title}", fg="cyan", bold=True), err=True)
+    click.echo(f"Summary: {summary}", err=True)
 
     action_items = processed.get("action_items", [])
     if action_items:
-        click.echo(click.style(f"\nAction Items ({len(action_items)}):", fg="yellow"))
+        click.echo(click.style(f"\nAction Items ({len(action_items)}):", fg="yellow"), err=True)
         for item in action_items:
-            click.echo(f"  - [{item.get('owner', '?')}] {item.get('task', '')}")
+            click.echo(f"  - [{item.get('owner', '?')}] {item.get('task', '')}", err=True)
 
-    click.echo(click.style(f"\nNote saved: {note_path}", fg="green"))
-    # Print summary to stdout for the menu bar app to capture
-    print(summary)
+    click.echo(click.style(f"\nNote saved: {note_path}", fg="green"), err=True)
+    # Only the title goes to stdout — menu bar app reads this
+    print(title)
 
     if slack:
         msg = format_slack_message(processed, note_path)
@@ -475,7 +475,7 @@ def process_latest(engine, diarize):
     total = time.time() - t0
 
     stage("done", f"Total: {total:.1f}s")
-    print(processed.get("summary", title))
+    print(title)
 
 
 @cli.command()

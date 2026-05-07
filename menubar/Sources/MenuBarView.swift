@@ -137,30 +137,17 @@ struct ProcessingStepView: View {
     let state: StepState
 
     var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            icon
-                .frame(width: 14, height: 14)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(state == .pending ? .secondary : .primary)
-        }
+        stateIcon + Text("  \(label)").font(.caption)
     }
 
-    @ViewBuilder
-    private var icon: some View {
+    private var stateIcon: Text {
         switch state {
         case .pending:
-            Image(systemName: "circle")
-                .font(.system(size: 11))
-                .foregroundStyle(.quaternary)
+            return Text("○").font(.caption).foregroundStyle(.quaternary)
         case .active:
-            ProgressView()
-                .controlSize(.mini)
-                .scaleEffect(0.8)
+            return Text("◉").font(.caption).foregroundStyle(.blue)
         case .done:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.green)
+            return Text("✓").font(.caption).foregroundStyle(.green)
         }
     }
 }

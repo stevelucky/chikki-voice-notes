@@ -2,9 +2,35 @@
 
 import os
 import json
+import re
 from datetime import datetime
 
 from .config import CONFIG
+
+
+def _parse_recording_time(audio_path: str) -> datetime:
+    """Extract datetime from recording filename, fall back to file mtime, then now."""
+    fname = os.path.basename(audio_path)
+    m = re.search(r'(\d{8})_(\d{6})', fname)
+    if m:
+        try:
+            return datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(audio_path))
+    except Exception:
+        return datetime.now()
+
+
+def _safe_filename(title: str, max_len: int = 80) -> str:
+    """Convert a title to a safe filename, preserving case and spaces."""
+    # Replace characters invalid on macOS/Windows filesystems
+    for ch in r'/\:*?"<>|':
+        title = title.replace(ch, "-")
+    # Collapse multiple spaces/dashes and strip edges
+    title = " ".join(title.split()).strip(" -")
+    return title[:max_len].rstrip(" -")
 
 
 def _format_duration(seconds: float) -> str:
@@ -20,11 +46,11 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     notes_dir = CONFIG["output"]["notes_dir"]
     os.makedirs(notes_dir, exist_ok=True)
 
-    timestamp = datetime.now()
+    timestamp = _parse_recording_time(audio_path)
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%H:%M")
-    slug = processed.get("title", "untitled").lower().replace(" ", "-")[:50]
-    base_name = f"{timestamp.strftime('%Y%m%d_%H%M')}_{slug}"
+    title_safe = _safe_filename(processed.get("title", "Untitled"))
+    base_name = f"{timestamp.strftime('%Y%m%d_%H%M')}_{title_safe}"
     filename = f"{base_name}.md"
     filepath = os.path.join(notes_dir, filename)
 

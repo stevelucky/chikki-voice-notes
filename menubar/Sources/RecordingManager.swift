@@ -145,17 +145,24 @@ class RecordingManager: ObservableObject {
     }
 
     func pickAndProcessAudioFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.audio, .wav, .mp3, .mpeg4Audio]
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Process"
-        panel.message = "Select a recording to transcribe and process"
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url, let self else { return }
-            Task { @MainActor in
-                await self.processAudioFile(at: url.path)
+        // Delay lets the MenuBarExtra popup fully dismiss before the panel appears,
+        // which prevents the menu bar icon becoming unresponsive afterwards.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.audio, .wav, .mp3, .mpeg4Audio]
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Process"
+            panel.message = "Select a recording to transcribe and process"
+            panel.directoryURL = URL(fileURLWithPath: "\(self.projectDir)/recordings")
+            panel.level = .modalPanel
+            panel.begin { [weak self] response in
+                guard response == .OK, let url = panel.url, let self else { return }
+                Task { @MainActor in
+                    await self.processAudioFile(at: url.path)
+                }
             }
         }
     }

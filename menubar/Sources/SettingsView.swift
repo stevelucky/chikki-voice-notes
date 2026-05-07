@@ -1,9 +1,11 @@
 import SwiftUI
 import KeyboardShortcuts
+import ServiceManagement
 
 struct SettingsView: View {
     @AppStorage("projectDir") private var projectDir: String = ""
     @AppStorage("diarizeEnabled") private var diarizeEnabled: Bool = false
+    @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
     var body: some View {
         let cfg = configValues
@@ -25,6 +27,21 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+            }
+
+            Section("General") {
+                Toggle("Open at Login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        do {
+                            if enabled {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            launchAtLogin = !enabled
+                        }
+                    }
             }
 
             Section("Transcription") {

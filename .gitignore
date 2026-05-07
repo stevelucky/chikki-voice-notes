@@ -12,6 +12,8 @@ config.yaml
 # Build artifacts
 .build/
 build/
+menubar/.xcode-build/
+menubar/.swiftpm/
 
 # Python
 __pycache__/
