@@ -14,6 +14,8 @@ config.yaml
 build/
 menubar/.xcode-build/
 menubar/.swiftpm/
+menubar/Scribe.iconset/
+menubar/icon_1024.png
 
 # Python
 __pycache__/
