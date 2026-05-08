@@ -134,6 +134,31 @@ class RecordingManager: ObservableObject {
         await processLatest()
     }
 
+    func cancelRecording() async {
+        guard isRecording else { return }
+
+        if let proc = recordProcess, proc.isRunning {
+            proc.interrupt()
+            await Task.detached { proc.waitUntilExit() }.value
+        }
+        recordProcess = nil
+
+        timer?.invalidate()
+        timer = nil
+        isRecording = false
+
+        // Delete the most recent WAV — the one we just recorded
+        let recordingsPath = "\(projectDir)/recordings"
+        if let latest = (try? FileManager.default.contentsOfDirectory(atPath: recordingsPath))?
+            .filter({ $0.hasSuffix(".wav") })
+            .sorted()
+            .last {
+            try? FileManager.default.removeItem(atPath: "\(recordingsPath)/\(latest)")
+        }
+
+        sendNotification(title: "Scribe", body: "Recording cancelled and deleted.")
+    }
+
     func processLatest() async {
         let capturedProjectDir = projectDir
         let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")

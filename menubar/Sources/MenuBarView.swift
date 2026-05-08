@@ -22,6 +22,21 @@ struct MenuBarView: View {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
+                Button("Stop & Cancel") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        NSApp.activate(ignoringOtherApps: true)
+                        let alert = NSAlert()
+                        alert.messageText = "Cancel Recording?"
+                        alert.informativeText = "The recording will be deleted and not processed."
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "Delete Recording")
+                        alert.addButton(withTitle: "Keep Recording")
+                        if alert.runModal() == .alertFirstButtonReturn {
+                            Task { await recorder.cancelRecording() }
+                        }
+                    }
+                }
+
             } else if recorder.isProcessing {
                 // Multi-step progress
                 VStack(alignment: .leading, spacing: 6) {
