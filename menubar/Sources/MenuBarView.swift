@@ -16,6 +16,7 @@ struct MenuBarView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
+                .allowsHitTesting(false)
 
                 Button("Stop Recording") {
                     Task { await recorder.stopRecording() }
@@ -73,6 +74,7 @@ struct MenuBarView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
                 .frame(minWidth: 260)
+                .allowsHitTesting(false)
 
             } else {
                 Button("Start Recording") {
@@ -99,6 +101,7 @@ struct MenuBarView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
+                .allowsHitTesting(false)
                 Divider()
             } else if let lastNote = recorder.lastNote, !lastNote.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
@@ -113,6 +116,7 @@ struct MenuBarView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
                 .frame(maxWidth: 260, alignment: .leading)
+                .allowsHitTesting(false)
                 Divider()
             }
 
@@ -125,6 +129,10 @@ struct MenuBarView: View {
             }
 
             Divider()
+
+            Button("Manage Speakers...") {
+                SpeakerWindowController.shared.show()
+            }
 
             Button("Settings...") {
                 SettingsWindowController.shared.show()

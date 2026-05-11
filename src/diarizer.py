@@ -54,6 +54,13 @@ class Diarizer:
         return segments
 
 
+def identify_and_merge(transcript: dict, speaker_segments: list, audio_path: str, project_dir: str) -> dict:
+    """Identify known speakers, then merge into transcript."""
+    from .speaker_profiles import identify_speakers
+    speaker_segments = identify_speakers(project_dir, speaker_segments, audio_path)
+    return merge_diarization(transcript, speaker_segments)
+
+
 def merge_diarization(transcript: dict, speaker_segments: list) -> dict:
     """Merge speaker segments into the transcript segments."""
     if not speaker_segments or not transcript.get("segments"):

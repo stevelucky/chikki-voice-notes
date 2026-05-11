@@ -5,6 +5,7 @@
 recordings/
 transcripts/
 notes/
+speakers/
 
 # Local config (users copy from .example)
 config.yaml

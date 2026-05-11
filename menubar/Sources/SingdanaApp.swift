@@ -61,7 +61,27 @@ class SettingsWindowController {
             let win = NSWindow(contentViewController: controller)
             win.title = "Scribe Settings"
             win.styleMask = [.titled, .closable, .miniaturizable]
-            win.setContentSize(NSSize(width: 440, height: 420))
+            win.setContentSize(NSSize(width: 460, height: 360))
+            win.center()
+            win.isReleasedWhenClosed = false
+            window = win
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+class SpeakerWindowController {
+    static let shared = SpeakerWindowController()
+    private var window: NSWindow?
+
+    func show() {
+        if window == nil {
+            let controller = NSHostingController(rootView: SpeakerProfilesView())
+            let win = NSWindow(contentViewController: controller)
+            win.title = "Manage Speakers"
+            win.styleMask = [.titled, .closable]
+            win.setContentSize(NSSize(width: 360, height: 320))
             win.center()
             win.isReleasedWhenClosed = false
             window = win

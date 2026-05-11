@@ -19,12 +19,13 @@ from .config import CONFIG
 
 
 class Recorder:
-    def __init__(self):
+    def __init__(self, output_path: str = None):
         self._cfg = CONFIG["recording"]
         self._sample_rate = self._cfg["sample_rate"]
         self._channels = self._cfg["channels"]
         self._max_duration = self._cfg["max_duration_minutes"] * 60
         self._recordings_dir = self._cfg["recordings_dir"]
+        self._output_path = output_path  # override output file if set
         os.makedirs(self._recordings_dir, exist_ok=True)
 
         self._stream = None
@@ -82,9 +83,13 @@ class Recorder:
                 return None
 
             # Open WAV file for incremental writing
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"recording_{timestamp}.wav"
-            self._filepath = os.path.join(self._recordings_dir, filename)
+            if self._output_path:
+                self._filepath = self._output_path
+                os.makedirs(os.path.dirname(self._filepath), exist_ok=True)
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"recording_{timestamp}.wav"
+                self._filepath = os.path.join(self._recordings_dir, filename)
             self._file = sf.SoundFile(
                 self._filepath,
                 mode="w",

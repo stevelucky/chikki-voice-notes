@@ -381,6 +381,10 @@ class RecordingManager: ObservableObject {
         return Self.parseDotEnv(at: "\(projectDir)/.env")
     }
 
+    nonisolated static func parseDotEnvStatic(at path: String) -> [String: String]? {
+        return parseDotEnv(at: path)
+    }
+
     nonisolated private static func parseDotEnv(at path: String) -> [String: String]? {
         guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         var vars: [String: String] = [:]
@@ -401,7 +405,7 @@ class RecordingManager: ObservableObject {
         return vars
     }
 
-    nonisolated private static func findCondaBase() -> String {
+    nonisolated static func findCondaBase() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let candidates = [
             "\(home)/miniconda3",

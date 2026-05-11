@@ -103,11 +103,12 @@ def cli():
 
 @cli.command()
 @click.option("--duration", "-d", type=int, default=0, help="Max recording duration in seconds (0=unlimited)")
-def record(duration):
+@click.option("--output", "-o", default=None, help="Override output file path")
+def record(duration, output):
     """Record audio from microphone. Press Ctrl+C to stop."""
     from .recorder import Recorder
 
-    rec = Recorder()
+    rec = Recorder(output_path=output)
     rec.start()
     click.echo(click.style("Recording... ", fg="red", bold=True) + "Press Ctrl+C to stop.")
 
@@ -190,11 +191,12 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
 
     do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
     if do_diarize:
-        from .diarizer import Diarizer, merge_diarization
+        from .diarizer import Diarizer, identify_and_merge
+        from .config import _BASE_DIR
         with live_timer("Diarizing speakers"):
             d = Diarizer()
             speaker_segments = d.diarize(audio_path)
-            transcript = merge_diarization(transcript, speaker_segments)
+            transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
 
     p = Processor(meeting_type=meeting_type)
     stage("processing")
@@ -294,11 +296,12 @@ def quick(context, slack, duration, engine, meeting_type, length, diarize):
 
     do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
     if do_diarize:
-        from .diarizer import Diarizer, merge_diarization
+        from .diarizer import Diarizer, identify_and_merge
+        from .config import _BASE_DIR
         with live_timer("Diarizing speakers"):
             d = Diarizer()
             speaker_segments = d.diarize(audio_path)
-            transcript = merge_diarization(transcript, speaker_segments)
+            transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
 
     p = Processor(meeting_type=meeting_type)
     _strategy = _resolve_length(length, transcript.get("segments"))
@@ -452,10 +455,11 @@ def process_latest(engine, diarize):
     do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
     if do_diarize:
         stage("diarizing", "Running pyannote pipeline...")
-        from .diarizer import Diarizer, merge_diarization
+        from .diarizer import Diarizer, identify_and_merge
+        from .config import _BASE_DIR
         d = Diarizer()
         speaker_segments = d.diarize(audio_path)
-        transcript = merge_diarization(transcript, speaker_segments)
+        transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
         
     t1 = time.time()
 
@@ -505,6 +509,47 @@ def list_notes():
                 title = line.split(":", 1)[1].strip().strip('"')
                 break
         click.echo(f"  {note}  —  {title}")
+
+
+@cli.command("enroll-speaker")
+@click.argument("audio_path", type=click.Path(exists=True))
+@click.option("--name", "-n", required=True, help="Speaker's full name")
+@click.option("--role", "-r", default="", help="Speaker's role or title")
+@click.option("--notes", default="", help="Any additional notes")
+def enroll_speaker(audio_path, name, role, notes):
+    """Enroll a speaker from a voice sample for automatic identification."""
+    from .speaker_profiles import enroll_speaker as _enroll
+    from .config import _BASE_DIR
+    with live_timer(f"Computing embedding for {name}"):
+        profile = _enroll(_BASE_DIR, name, role, notes, audio_path)
+    click.echo(click.style(f"\nEnrolled: {profile['name']}", fg="green", bold=True))
+    if role:
+        click.echo(f"Role: {role}")
+    click.echo(f"Sample: {profile['sample']}")
+
+
+@cli.command("list-speakers")
+def list_speakers():
+    """List all enrolled speakers."""
+    from .speaker_profiles import load_profiles
+    from .config import _BASE_DIR
+    profiles = load_profiles(_BASE_DIR)
+    if not profiles:
+        click.echo("No speakers enrolled yet.")
+        return
+    for p in profiles:
+        role_str = f"  ({p['role']})" if p.get('role') else ""
+        click.echo(f"  {p['name']}{role_str}")
+
+
+@cli.command("delete-speaker")
+@click.argument("name")
+def delete_speaker(name):
+    """Remove an enrolled speaker."""
+    from .speaker_profiles import delete_speaker as _delete
+    from .config import _BASE_DIR
+    _delete(_BASE_DIR, name)
+    click.echo(click.style(f"Deleted: {name}", fg="yellow"))
 
 
 if __name__ == "__main__":
