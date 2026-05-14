@@ -8,6 +8,7 @@ class RecordingManager: ObservableObject {
 
     @Published var isRecording = false
     @Published var elapsedSeconds: Int = 0
+    @Published var recordingBarIcon: NSImage = NSImage()
     @Published var lastNote: String?
     @Published var isProcessing = false
     @Published var processingStage: String = ""  // raw stage key from Python
@@ -106,9 +107,12 @@ class RecordingManager: ObservableObject {
         isRecording = true
         elapsedSeconds = 0
 
+        recordingBarIcon = Self.makeRecordingPillIcon(time: formattedTime)
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.elapsedSeconds += 1
+                guard let self else { return }
+                self.elapsedSeconds += 1
+                self.recordingBarIcon = Self.makeRecordingPillIcon(time: self.formattedTime)
             }
         }
 
@@ -451,5 +455,29 @@ class RecordingManager: ObservableObject {
         let m = processingElapsed / 60
         let s = processingElapsed % 60
         return String(format: "%02d:%02d", m, s)
+    }
+
+    func terminateSubprocesses() {
+        recordProcess?.terminate()
+        recordProcess = nil
+    }
+
+    static func makeRecordingPillIcon(time: String) -> NSImage {
+        let view = ZStack {
+            Capsule().fill(Color.red)
+            HStack(spacing: 3) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(time)
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+            }
+            .foregroundColor(.white)
+        }
+        .frame(width: 62, height: 20)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2.0
+        let img = renderer.nsImage ?? NSImage()
+        img.isTemplate = false
+        return img
     }
 }

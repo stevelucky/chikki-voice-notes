@@ -37,6 +37,9 @@ echo ""
 echo "Built: $(pwd)/build/Scribe.app"
 
 if [ "${1}" = "--install" ]; then
+    pkill -x Scribe 2>/dev/null || true
+    pkill -f "src.cli record" 2>/dev/null || true
+    sleep 0.3
     cp -r build/Scribe.app /Applications/
     echo "Installed to /Applications/Scribe.app"
     open /Applications/Scribe.app

@@ -17,7 +17,7 @@ struct ScribeApp: App {
                 .environmentObject(recorder)
         } label: {
             if recorder.isRecording {
-                Image(nsImage: Self.recordingPillIcon)
+                Image(nsImage: recorder.recordingBarIcon)
             } else if recorder.isProcessing {
                 Image(nsImage: Self.processingPillIcon)
             } else {
@@ -27,9 +27,6 @@ struct ScribeApp: App {
     }
 
     // Pre-rendered full-color pill icons — avoids template-mode color stripping in menu bar
-    static let recordingPillIcon: NSImage = pillIcon(
-        symbol: "mic.fill", background: .red
-    )
     static let processingPillIcon: NSImage = pillIcon(
         symbol: "waveform", background: Color(red: 0.95, green: 0.75, blue: 0.0), foreground: .black
     )
@@ -96,5 +93,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.onKeyUp(for: .toggleRecording) {
             Task { await RecordingManager.shared.toggle() }
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        RecordingManager.shared.terminateSubprocesses()
     }
 }
