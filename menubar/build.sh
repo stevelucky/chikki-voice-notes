@@ -24,6 +24,7 @@ cp Sources/Info.plist build/Scribe.app/Contents/Info.plist
 
 # Copy app icon
 cp Scribe.icns build/Scribe.app/Contents/Resources/
+cp mic_idle.png mic_idle@2x.png build/Scribe.app/Contents/Resources/
 
 # Copy resource bundles from dependencies (e.g. KeyboardShortcuts localizations)
 for bundle in .xcode-build/Build/Products/Release/*.bundle; do

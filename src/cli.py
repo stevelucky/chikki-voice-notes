@@ -124,17 +124,17 @@ def record(duration, output):
         while not stopped.is_set():
             elapsed = int(time.time() - start)
             m, s = divmod(elapsed, 60)
-            click.echo(f"\r  {m:02d}:{s:02d}", nl=False)
+            click.echo(f"\r  {m:02d}:{s:02d}", nl=False, err=True)
             if duration and elapsed >= duration:
                 break
             stopped.wait(0.5)
     finally:
         signal.signal(signal.SIGINT, old_handler)
 
-    click.echo()
+    click.echo(err=True)
     filepath = rec.stop()
     if filepath:
-        click.echo(click.style(f"Saved: {filepath}", fg="green"))
+        click.echo(click.style(f"Saved: {filepath}", fg="green"), err=True)
     return filepath
 
 

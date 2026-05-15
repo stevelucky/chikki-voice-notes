@@ -123,16 +123,18 @@ class RecordingManager: ObservableObject {
     func stopRecording() async {
         guard isRecording else { return }
 
-        if let proc = recordProcess, proc.isRunning {
-            proc.interrupt()
-            // Wait off the main thread so we don't freeze the UI
-            await Task.detached { proc.waitUntilExit() }.value
-        }
+        // Update UI immediately so buttons respond at once
+        let proc = recordProcess
         recordProcess = nil
-
         timer?.invalidate()
         timer = nil
         isRecording = false
+
+        // Signal Python and wait for it to flush the WAV to disk before processing
+        if let proc, proc.isRunning {
+            proc.interrupt()
+            await Task.detached { proc.waitUntilExit() }.value
+        }
 
         sendNotification(title: "Scribe", body: "Recording stopped. Processing...")
         await processLatest()
@@ -141,15 +143,17 @@ class RecordingManager: ObservableObject {
     func cancelRecording() async {
         guard isRecording else { return }
 
-        if let proc = recordProcess, proc.isRunning {
-            proc.interrupt()
-            await Task.detached { proc.waitUntilExit() }.value
-        }
+        // Update UI immediately
+        let proc = recordProcess
         recordProcess = nil
-
         timer?.invalidate()
         timer = nil
         isRecording = false
+
+        if let proc, proc.isRunning {
+            proc.interrupt()
+            await Task.detached { proc.waitUntilExit() }.value
+        }
 
         // Delete the most recent WAV — the one we just recorded
         let recordingsPath = "\(projectDir)/recordings"

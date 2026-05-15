@@ -21,10 +21,17 @@ struct ScribeApp: App {
             } else if recorder.isProcessing {
                 Image(nsImage: Self.processingPillIcon)
             } else {
-                Image(systemName: "mic.fill")
+                Image(nsImage: Self.idleMicIcon)
             }
         }
     }
+
+    // Custom idle mic icon — loaded from bundle, template so it adapts to light/dark mode
+    static let idleMicIcon: NSImage = {
+        let img = NSImage(named: "mic_idle") ?? NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil) ?? NSImage()
+        img.isTemplate = true
+        return img
+    }()
 
     // Pre-rendered full-color pill icons — avoids template-mode color stripping in menu bar
     static let processingPillIcon: NSImage = pillIcon(
