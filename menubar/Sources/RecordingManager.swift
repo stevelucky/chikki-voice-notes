@@ -22,6 +22,7 @@ class RecordingManager: ObservableObject {
     private var recordProcess: Process?
     private var timer: Timer?
     private var processingTimer: Timer?
+    private var sleepAssertion: NSObjectProtocol?
 
     private let condaEnv = "chikki"
     private static let projectDirKey = "projectDir"
@@ -116,8 +117,20 @@ class RecordingManager: ObservableObject {
             }
         }
 
+        sleepAssertion = ProcessInfo.processInfo.beginActivity(
+            options: [.idleSystemSleepDisabled, .suddenTerminationDisabled],
+            reason: "Scribe is recording audio"
+        )
+
         sendNotification(title: "Scribe", body: "Recording started. Press Cmd+Shift+R to stop.")
         recordProcess = runCLI(args: ["record", "--duration", "0"], background: true)
+    }
+
+    private func endSleepAssertion() {
+        if let token = sleepAssertion {
+            ProcessInfo.processInfo.endActivity(token)
+            sleepAssertion = nil
+        }
     }
 
     func stopRecording() async {
@@ -129,6 +142,7 @@ class RecordingManager: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRecording = false
+        endSleepAssertion()
 
         // Signal Python and wait for it to flush the WAV to disk before processing
         if let proc, proc.isRunning {
@@ -149,6 +163,7 @@ class RecordingManager: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRecording = false
+        endSleepAssertion()
 
         if let proc, proc.isRunning {
             proc.interrupt()

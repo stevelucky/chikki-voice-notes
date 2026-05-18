@@ -6,7 +6,6 @@ Monitors for default input device changes and seamlessly switches mid-recording.
 
 import atexit
 import os
-import subprocess
 import queue
 import sys
 import threading
@@ -58,7 +57,6 @@ class Recorder:
         self._lock = threading.Lock()
         self._file = None
         self._filepath = None
-        self._caffeinate = None
         self._write_queue = None
         self._writer_thread = None
         self._stop_writer = threading.Event()
@@ -170,15 +168,6 @@ class Recorder:
             self._monitor_thread = threading.Thread(target=self._device_monitor_loop, daemon=True)
             self._monitor_thread.start()
 
-            try:
-                self._caffeinate = subprocess.Popen(
-                    ["caffeinate", "-dimsu"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except FileNotFoundError:
-                self._caffeinate = None
-
             atexit.register(self._emergency_save)
 
         return True
@@ -216,17 +205,6 @@ class Recorder:
                 self._file.close()
                 self._file = None
 
-            if self._caffeinate is not None:
-                try:
-                    self._caffeinate.terminate()
-                    self._caffeinate.wait(timeout=2)
-                except Exception:
-                    try:
-                        self._caffeinate.kill()
-                    except Exception:
-                        pass
-                self._caffeinate = None
-
             try:
                 atexit.unregister(self._emergency_save)
             except Exception:
@@ -255,12 +233,6 @@ class Recorder:
                 self._file.close()
                 self._file = None
                 print(f"\n[recorder] Emergency save: {self._filepath}", file=sys.stderr)
-            if self._caffeinate is not None:
-                try:
-                    self._caffeinate.terminate()
-                except Exception:
-                    pass
-                self._caffeinate = None
         except Exception:
             pass
 
