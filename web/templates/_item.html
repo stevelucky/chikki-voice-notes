@@ -1,0 +1,44 @@
+<li class="item-row flex items-start gap-3 px-4 py-3 hover:bg-slate-50/70 transition-colors
+           {% if item and item.done %}opacity-50{% endif %}"
+    {% if item %}data-bucket="{{ item.bucket }}"{% endif %}>
+  {% if item %}
+  <input type="checkbox" autocomplete="off" {% if item.done %}checked{% endif %}
+         class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 cursor-pointer
+                focus:ring-indigo-400"
+         hx-post="/action-items/toggle"
+         hx-include="closest .item-row"
+         hx-target="closest .item-row" hx-swap="outerHTML">
+  <input type="hidden" name="filename" value="{{ item.note_filename }}">
+  <input type="hidden" name="line_no" value="{{ item.line_no }}">
+  <input type="hidden" name="done" value="{{ 'true' if not item.done else 'false' }}">
+
+  <div class="flex-1 min-w-0">
+    <span class="text-sm leading-snug {% if item.done %}line-through text-slate-400{% else %}text-slate-800{% endif %}">{{ item.text }}</span>
+    {% set show_owner = item.owner and item.bucket == 'waiting' %}
+    {% if show_owner or item.deadline %}
+    <div class="mt-1.5 flex flex-wrap gap-2 text-xs">
+      {% if show_owner %}
+      <span class="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium">{{ item.owner }}</span>
+      {% endif %}
+      {% if item.deadline %}
+      <span class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">by {{ item.deadline }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <select name="owner" title="Reassign"
+          class="shrink-0 text-xs text-slate-500 bg-transparent border border-transparent
+                 hover:border-slate-300 rounded px-1 py-0.5 cursor-pointer
+                 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          hx-post="/action-items/reassign"
+          hx-include="closest .item-row"
+          hx-target="closest .item-row" hx-swap="outerHTML">
+    <option value="{{ user_name }}" {% if item.bucket == 'mine' %}selected{% endif %}>Me</option>
+    {% for p in owners %}
+    <option value="{{ p }}" {% if item.bucket == 'waiting' and item.owner == p %}selected{% endif %}>{{ p }}</option>
+    {% endfor %}
+    <option value="unassigned" {% if item.bucket == 'unassigned' %}selected{% endif %}>Unassigned</option>
+  </select>
+  {% endif %}
+</li>

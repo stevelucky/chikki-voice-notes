@@ -1,4 +1,4 @@
-"""Global hotkey helper for Chikki.
+"""Global hotkey helper for Scribe.
 
 Creates a macOS AppleScript that can be bound to a keyboard shortcut.
 Run: python -m src.cli menubar  for the full menu bar experience.
@@ -14,14 +14,14 @@ def setup_shortcut():
     """Create an AppleScript helper that can be bound to a keyboard shortcut via macOS Settings."""
     script = f'''
     tell application "Terminal"
-        do script "cd {_PROJECT_ROOT} && conda activate chikki && python -m src.cli quick"
+        do script "cd {_PROJECT_ROOT} && conda activate scribe && python -m src.cli quick"
         activate
     end tell
     '''
 
     bin_dir = _PROJECT_ROOT / "bin"
     bin_dir.mkdir(exist_ok=True)
-    helper_path = bin_dir / "chikki-quick.scpt"
+    helper_path = bin_dir / "scribe-quick.scpt"
 
     subprocess.run(
         ["osacompile", "-o", str(helper_path), "-e", script],

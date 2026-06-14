@@ -6,6 +6,15 @@ extension KeyboardShortcuts.Name {
     static let quickProcess = Self("quickProcess", default: .init(.r, modifiers: [.command, .shift, .option]))
 }
 
+/// Menu-bar label that observes only the icon model, so per-second icon refreshes
+/// don't propagate into the dropdown's view graph.
+struct StatusBarLabel: View {
+    @ObservedObject var icon: StatusIconModel
+    var body: some View {
+        Image(nsImage: icon.image)
+    }
+}
+
 @main
 struct ScribeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -16,13 +25,9 @@ struct ScribeApp: App {
             MenuBarView()
                 .environmentObject(recorder)
         } label: {
-            if recorder.isRecording {
-                Image(nsImage: recorder.recordingBarIcon)
-            } else if recorder.isProcessing {
-                Image(nsImage: Self.processingPillIcon)
-            } else {
-                Image(nsImage: Self.idleMicIcon)
-            }
+            // Observe the icon model directly so the per-second icon refresh updates
+            // only this label — never the dropdown menu (which would scramble hover).
+            StatusBarLabel(icon: recorder.statusIcon)
         }
     }
 
@@ -80,8 +85,12 @@ class SpeakerWindowController {
     private var window: NSWindow?
 
     func show() {
-        if window == nil {
-            let controller = NSHostingController(rootView: SpeakerProfilesView())
+        // Recreate the hosting controller each time so the profile list reloads
+        // (onAppear won't re-fire on a reused NSHostingController).
+        let controller = NSHostingController(rootView: SpeakerProfilesView())
+        if let win = window {
+            win.contentViewController = controller
+        } else {
             let win = NSWindow(contentViewController: controller)
             win.title = "Manage Speakers"
             win.styleMask = [.titled, .closable]
@@ -97,8 +106,23 @@ class SpeakerWindowController {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Safety net: a prior crash could have orphaned a `src.cli record` process
+        // still holding the mic. On a fresh launch nothing of ours is recording yet,
+        // so clean up any stragglers.
+        RecordingManager.killOrphanedRecorders()
+        RecordingManager.shared.runAudioCleanup()
+
         KeyboardShortcuts.onKeyUp(for: .toggleRecording) {
             Task { await RecordingManager.shared.toggle() }
+        }
+        // Process Audio File: open a picker to choose any audio file and process it.
+        KeyboardShortcuts.onKeyUp(for: .quickProcess) {
+            Task { @MainActor in
+                let mgr = RecordingManager.shared
+                guard !mgr.isRecording, !mgr.isProcessing else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                mgr.pickAndProcessAudioFile()
+            }
         }
     }
 

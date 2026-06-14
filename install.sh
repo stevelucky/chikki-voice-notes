@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "🍫 Chikki — Setup"
+echo "🍫 Scribe — Setup"
 echo ""
 
 # ── Prerequisites ──────────────────────────────────────────────────────────────
@@ -18,19 +18,20 @@ check_command() {
 
 echo "[1/5] Checking prerequisites..."
 check_command conda "Install Miniconda: https://docs.conda.io/en/latest/miniconda.html"
-check_command swift "Install Xcode CLI tools: xcode-select --install"
+# The menu bar app is built with xcodebuild and requires full Xcode (not just CLT).
+check_command xcodebuild "Install full Xcode from the App Store (Command Line Tools alone are not enough)."
 brew install portaudio ffmpeg 2>/dev/null || true
 echo "  ✓ Prerequisites OK"
 
 # ── Conda env ─────────────────────────────────────────────────────────────────
 
 echo ""
-echo "[2/5] Setting up conda environment 'chikki'..."
-if conda info --envs 2>/dev/null | grep -q "^chikki "; then
-    echo "  Updating existing 'chikki' env..."
+echo "[2/5] Setting up conda environment 'scribe'..."
+if conda info --envs 2>/dev/null | grep -q "^scribe "; then
+    echo "  Updating existing 'scribe' env..."
     conda env update -f environment.yml --prune -q
 else
-    echo "  Creating 'chikki' env..."
+    echo "  Creating 'scribe' env..."
     conda env create -f environment.yml -q
 fi
 echo "  ✓ Conda env ready"
@@ -40,7 +41,7 @@ echo "  ✓ Conda env ready"
 echo ""
 echo "[3/5] Installing Python dependencies..."
 eval "$(conda shell.bash hook)"
-conda activate chikki
+conda activate scribe
 pip install -q -r requirements.txt
 echo "  ✓ Python deps installed"
 
@@ -70,7 +71,7 @@ fi
 # ── Swift app ────────────────────────────────────────────────────────────────
 
 echo ""
-echo "[5/5] Building Chikki menu bar app..."
+echo "[5/5] Building Scribe menu bar app..."
 cd menubar && bash build.sh
 cd "$SCRIPT_DIR"
 
@@ -82,9 +83,9 @@ echo ""
 echo "Next steps:"
 echo ""
 echo "  1. Edit .env and add your API key"
-echo "  2. conda activate chikki"
+echo "  2. conda activate scribe"
 echo "  3. python -m src.cli quick         # record + transcribe + summarize"
-echo "  4. open menubar/build/Chikki.app  # launch menu bar app"
+echo "  4. open menubar/build/Scribe.app  # launch menu bar app"
 echo ""
 echo "Optional alias (add to ~/.zshrc):"
-echo "  alias chikki='conda activate chikki && cd $SCRIPT_DIR && python -m src.cli'"
+echo "  alias scribe='conda activate scribe && cd $SCRIPT_DIR && python -m src.cli'"

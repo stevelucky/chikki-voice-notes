@@ -50,10 +50,22 @@ def _transcribe_indicwhisper(audio_path: str, model: str, language: str) -> dict
             "language": result.get("language", language),
         }
     except Exception as e:
-        print(f"[transcriber]", file=__import__('sys').stderr); print(f"[transcriber] mlx_whisper failed for IndicWhisper ({e}), falling back to transformers")
-        import torch
-        from transformers import WhisperProcessor, WhisperForConditionalGeneration
-        import soundfile as sf
+        import sys
+        print(
+            f"[transcriber] mlx_whisper failed for IndicWhisper ({e}), falling back to transformers",
+            file=sys.stderr,
+        )
+        try:
+            import torch
+            from transformers import WhisperProcessor, WhisperForConditionalGeneration
+            import soundfile as sf
+        except ImportError as imp:
+            raise RuntimeError(
+                "IndicWhisper requires the non-MLX transformers fallback, but its "
+                "dependencies are not installed. Install them with:\n"
+                "    pip install torch transformers scipy\n"
+                f"(original import error: {imp})"
+            ) from imp
 
         processor = WhisperProcessor.from_pretrained(model)
         model_obj = WhisperForConditionalGeneration.from_pretrained(model)
@@ -120,6 +132,11 @@ class Transcriber:
             raise ValueError(
                 f"Unknown engine '{self._engine_name}'. "
                 f"Available: {', '.join(self._cfg.get('engines', {}).keys())}"
+            )
+        if self._engine_name not in _ENGINES:
+            raise ValueError(
+                f"Engine '{self._engine_name}' is configured but not implemented. "
+                f"Implemented engines: {', '.join(_ENGINES.keys())}"
             )
         self._model = engine_cfg["model"]
         self._engine_fn = _ENGINES[self._engine_name]

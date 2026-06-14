@@ -40,6 +40,13 @@ processing:
   # Default meeting type (run: python -m src.cli types)
   default_type: default
 
+# Who "you" are — used to file to-dos as "Mine" in the dashboard. Set this in
+# Settings → Identity (no need to edit this file). Aliases is a comma-separated
+# list of other names/nicknames the AI might use for you.
+user:
+  name: ""
+  aliases: ""
+
 output:
   notes_dir: notes
   template: default

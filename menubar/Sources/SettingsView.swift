@@ -32,9 +32,22 @@ struct SettingsView: View {
 struct GeneralTab: View {
     @AppStorage("projectDir") private var projectDir: String = ""
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
+    @State private var retentionDays: Int = 0
+    @State private var userName: String = ""
+    @State private var userAliases: String = ""
 
     var body: some View {
         Form {
+            Section("Identity") {
+                TextField("Your name", text: $userName)
+                    .onSubmit { _ = writeUserIdentity(projectDir, name: userName, aliases: userAliases) }
+                TextField("Also known as (comma-separated)", text: $userAliases)
+                    .onSubmit { _ = writeUserIdentity(projectDir, name: userName, aliases: userAliases) }
+                Text("Used to file action items as “Mine” in the dashboard. Include nicknames the AI might use for you. Saved when you press Return.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Startup") {
                 Toggle("Open at Login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
@@ -43,6 +56,21 @@ struct GeneralTab: View {
                             else { try SMAppService.mainApp.unregister() }
                         } catch { launchAtLogin = !enabled }
                     }
+            }
+
+            Section("Storage") {
+                Picker("Keep audio files", selection: $retentionDays) {
+                    Text("Forever").tag(0)
+                    Text("30 days").tag(30)
+                    Text("60 days").tag(60)
+                    Text("90 days").tag(90)
+                    Text("180 days").tag(180)
+                    Text("1 year").tag(365)
+                }
+                .onChange(of: retentionDays) { _, v in _ = writeRetentionDays(projectDir, v) }
+                Text("Older recordings are deleted automatically when you record, process, or launch Scribe. \"Forever\" never deletes.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Project Folder") {
@@ -67,6 +95,12 @@ struct GeneralTab: View {
         }
         .formStyle(.grouped)
         .padding(.top, 4)
+        .onAppear {
+            retentionDays = readRetentionDays(projectDir)
+            let id = readUserIdentity(projectDir)
+            userName = id.name
+            userAliases = id.aliases
+        }
     }
 
     private var isValidProject: Bool {
@@ -146,9 +180,9 @@ struct TranscriptionTab: View {
     }
 
     private func save() {
-        writeConfig(projectDir, engine: selectedEngine, engineModel: engineModel, provider: nil, llmModel: nil)
+        let ok = writeConfig(projectDir, engine: selectedEngine, engineModel: engineModel, provider: nil, llmModel: nil)
         RecordingManager.shared.saveProjectDir(projectDir)
-        flash($saveStatus, "Saved!")
+        flash($saveStatus, ok ? "Saved!" : "Save failed — check the project folder.")
     }
 }
 
@@ -226,15 +260,15 @@ struct NotesTab: View {
     }
 
     private func save() {
-        writeConfig(projectDir, engine: nil, engineModel: nil, provider: selectedProvider, llmModel: llmModel)
-        saveDotEnv(projectDir, keys: [
+        let okConfig = writeConfig(projectDir, engine: nil, engineModel: nil, provider: selectedProvider, llmModel: llmModel)
+        let okEnv = saveDotEnv(projectDir, keys: [
             "ANTHROPIC_API_KEY": anthropicKey,
             "OPENAI_API_KEY": openaiKey,
             "GOOGLE_API_KEY": geminiKey,
             "HF_TOKEN": hfToken,
         ], remove: ["GEMINI_API_KEY"])
         RecordingManager.shared.saveProjectDir(projectDir)
-        flash($saveStatus, "Saved!")
+        flash($saveStatus, (okConfig && okEnv) ? "Saved!" : "Save failed — check the project folder.")
     }
 }
 
@@ -246,7 +280,7 @@ struct ShortcutsTab: View {
             Section("Recording") {
                 KeyboardShortcuts.Recorder("Toggle Recording", name: .toggleRecording)
                     .padding(.vertical, 2)
-                KeyboardShortcuts.Recorder("Quick Process", name: .quickProcess)
+                KeyboardShortcuts.Recorder("Process Audio File", name: .quickProcess)
                     .padding(.vertical, 2)
             }
         }
@@ -298,16 +332,20 @@ private func yamlVal(_ line: String) -> String {
         .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
 }
 
-private func writeConfig(_ projectDir: String, engine: String?, engineModel: String?, provider: String?, llmModel: String?) {
+@discardableResult
+private func writeConfig(_ projectDir: String, engine: String?, engineModel: String?, provider: String?, llmModel: String?) -> Bool {
     let path = projectDir + "/config.yaml"
-    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
     var lines = text.components(separatedBy: "\n")
     var section = "", inEngines = false, currentEngine = ""
 
     for i in 0..<lines.count {
         let line = lines[i]
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.hasPrefix("#") else { continue }
+        // Skip blank lines and comments WITHOUT resetting section state — a blank
+        // line has indent 0 and would otherwise drop us out of the current section,
+        // so keys after a blank line (e.g. engines:) would never be rewritten.
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
         let indent = line.prefix(while: { $0 == " " }).count
         let pad = String(repeating: " ", count: indent)
 
@@ -330,7 +368,64 @@ private func writeConfig(_ projectDir: String, engine: String?, engineModel: Str
             else if trimmed.hasPrefix("model:"), let m = llmModel, !m.isEmpty { lines[i] = "\(pad)model: \(m)" }
         }
     }
-    try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    do {
+        try lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        return true
+    } catch {
+        return false
+    }
+}
+
+private func readUserIdentity(_ projectDir: String) -> (name: String, aliases: String) {
+    guard let text = try? String(contentsOfFile: projectDir + "/config.yaml", encoding: .utf8),
+          let block = text.range(of: #"(?m)^user:\n(?:[ \t]+.*\n?)*"#, options: .regularExpression) else {
+        return ("", "")
+    }
+    let userBlock = String(text[block])
+    func value(_ key: String) -> String {
+        guard let r = userBlock.range(of: "(?m)^[ \\t]+\(key):[ \\t]*(.*)$", options: .regularExpression),
+              let colon = userBlock[r].firstIndex(of: ":") else { return "" }
+        return String(userBlock[r][userBlock[r].index(after: colon)...])
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    }
+    return (value("name"), value("aliases"))
+}
+
+@discardableResult
+private func writeUserIdentity(_ projectDir: String, name: String, aliases: String) -> Bool {
+    let path = projectDir + "/config.yaml"
+    guard var text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+    func esc(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+    let block = "user:\n  name: \(esc(name))\n  aliases: \(esc(aliases))\n"
+    if let r = text.range(of: #"(?m)^user:\n(?:[ \t]+.*\n?)*"#, options: .regularExpression) {
+        text.replaceSubrange(r, with: block)
+    } else {
+        if !text.hasSuffix("\n") { text += "\n" }
+        text += "\n" + block
+    }
+    return (try? text.write(toFile: path, atomically: true, encoding: .utf8)) != nil
+}
+
+private func readRetentionDays(_ projectDir: String) -> Int {
+    guard let text = try? String(contentsOfFile: projectDir + "/config.yaml", encoding: .utf8),
+          let r = text.range(of: #"retention_days:\s*\d+"#, options: .regularExpression) else {
+        return 0
+    }
+    return Int(String(text[r].filter { $0.isNumber })) ?? 0
+}
+
+@discardableResult
+private func writeRetentionDays(_ projectDir: String, _ days: Int) -> Bool {
+    let path = projectDir + "/config.yaml"
+    guard var text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+    if let r = text.range(of: #"(?m)^[ \t]*retention_days:.*$"#, options: .regularExpression) {
+        let indent = text[r].prefix(while: { $0 == " " || $0 == "\t" })
+        text.replaceSubrange(r, with: "\(indent)retention_days: \(days)")
+    } else {
+        return false  // config.yaml ships with the key under recording:
+    }
+    return (try? text.write(toFile: path, atomically: true, encoding: .utf8)) != nil
 }
 
 private func parseDotEnv(_ projectDir: String) -> [String: String]? {
@@ -349,12 +444,18 @@ private func parseDotEnv(_ projectDir: String) -> [String: String]? {
     return vars
 }
 
-private func saveDotEnv(_ projectDir: String, keys: [String: String], remove: [String] = []) {
+@discardableResult
+private func saveDotEnv(_ projectDir: String, keys: [String: String], remove: [String] = []) -> Bool {
     let path = projectDir + "/.env"
     var lines = (try? String(contentsOfFile: path, encoding: .utf8))?.components(separatedBy: "\n") ?? []
     for key in keys.keys + remove { lines = lines.filter { !$0.hasPrefix("\(key)=") } }
     for (key, value) in keys where !value.isEmpty { lines.append("\(key)=\(value)") }
-    try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    do {
+        try lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        return true
+    } catch {
+        return false
+    }
 }
 
 private func flash(_ status: Binding<String>, _ message: String) {

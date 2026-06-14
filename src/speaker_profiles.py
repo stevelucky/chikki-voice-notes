@@ -79,8 +79,11 @@ def delete_speaker(project_dir: str, name: str):
     to_delete = next((p for p in profiles if p["name"] == name), None)
     if to_delete:
         for key in ("sample", "embedding"):
-            path = os.path.join(speakers_dir(project_dir), to_delete.get(key, ""))
-            if os.path.exists(path):
+            rel = to_delete.get(key)
+            if not rel:
+                continue  # missing key would resolve to the speakers/ dir itself
+            path = os.path.join(speakers_dir(project_dir), rel)
+            if os.path.isfile(path):
                 os.remove(path)
     save_profiles(project_dir, [p for p in profiles if p["name"] != name])
 

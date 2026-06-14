@@ -1,18 +1,39 @@
 #!/bin/bash
-set -e
+# pipefail so a failed xcodebuild isn't masked by grep's exit status (which
+# would otherwise let the script package a stale binary).
+set -euo pipefail
 
 cd "$(dirname "$0")"
 
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+# Locate an Xcode install; fall back to xcode-select if the default path is absent.
+if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
+if ! xcodebuild -version >/dev/null 2>&1; then
+    echo "error: xcodebuild not found — full Xcode is required (not just Command Line Tools)." >&2
+    exit 1
+fi
 
 echo "Building Scribe..."
+# Filter noisy output but preserve xcodebuild's real exit status via PIPESTATUS.
+set +e
 xcodebuild -scheme ScribeApp \
     -configuration Release \
     -derivedDataPath .xcode-build \
     -destination "platform=macOS" \
     build 2>&1 | grep -E "error:|warning:|BUILD"
+BUILD_STATUS=${PIPESTATUS[0]}
+set -e
+if [ "$BUILD_STATUS" -ne 0 ]; then
+    echo "error: xcodebuild failed (status $BUILD_STATUS) — not packaging stale binary." >&2
+    exit 1
+fi
 
 BINARY=".xcode-build/Build/Products/Release/ScribeApp"
+if [ ! -x "$BINARY" ]; then
+    echo "error: build did not produce $BINARY — aborting." >&2
+    exit 1
+fi
 
 # Create .app bundle
 rm -rf build/Scribe.app
@@ -31,8 +52,13 @@ for bundle in .xcode-build/Build/Products/Release/*.bundle; do
     [ -d "$bundle" ] && cp -r "$bundle" build/Scribe.app/Contents/Resources/
 done
 
-# Ad-hoc sign so Gatekeeper allows it to run
-codesign --force --deep --sign - build/Scribe.app
+# Ad-hoc sign so Gatekeeper allows it to run. Sign nested bundles first, then the
+# app (replaces deprecated --deep). Note: ad-hoc identity changes each build, so
+# TCC (microphone) grants may need re-approval after an --install.
+for bundle in build/Scribe.app/Contents/Resources/*.bundle; do
+    [ -d "$bundle" ] && codesign --force --sign - "$bundle"
+done
+codesign --force --sign - build/Scribe.app
 
 echo ""
 echo "Built: $(pwd)/build/Scribe.app"

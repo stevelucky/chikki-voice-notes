@@ -11,8 +11,10 @@ struct MenuBarView: View {
                     Circle()
                         .fill(.red)
                         .frame(width: 8, height: 8)
-                    Text("Recording: \(recorder.formattedTime)")
-                        .monospacedDigit()
+                    // Live elapsed time is shown in the menu-bar icon itself; keeping
+                    // it out of the dropdown means this menu never re-renders while
+                    // open, so hover highlighting stays stable.
+                    Text("Recording")
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -21,7 +23,9 @@ struct MenuBarView: View {
                 Button("Stop Recording") {
                     Task { await recorder.stopRecording() }
                 }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+                // Shows the user's *current* Toggle Recording shortcut and updates
+                // live when they change it in Settings (not a hardcoded ⌘⇧R).
+                .globalKeyboardShortcut(.toggleRecording)
 
                 Button("Stop & Cancel") {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -41,15 +45,8 @@ struct MenuBarView: View {
             } else if recorder.isProcessing {
                 // Multi-step progress
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Processing")
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Text(recorder.formattedProcessingTime)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
+                    Text("Processing")
+                        .fontWeight(.semibold)
 
                     ProcessingStepView(
                         label: "Transcribing audio",
@@ -64,12 +61,15 @@ struct MenuBarView: View {
                         state: recorder.stepState(for: "saving")
                     )
 
-                    if !recorder.processingDetail.isEmpty {
-                        Text(recorder.processingDetail)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
+                    // Always render this row (even when empty) at a fixed height.
+                    // If it toggled in/out, every menu item below it would shift by
+                    // a row as stages advance, and while the menu is open that frame
+                    // change scrambles AppKit's hover highlighting (items "bounce").
+                    Text(recorder.processingDetail.isEmpty ? " " : recorder.processingDetail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .frame(height: 14, alignment: .leading)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -80,11 +80,12 @@ struct MenuBarView: View {
                 Button("Start Recording") {
                     Task { await recorder.startRecording() }
                 }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .globalKeyboardShortcut(.toggleRecording)
 
                 Button("Process Audio File...") {
                     recorder.pickAndProcessAudioFile()
                 }
+                .globalKeyboardShortcut(.quickProcess)
             }
 
             Divider()
@@ -118,6 +119,10 @@ struct MenuBarView: View {
                 .frame(maxWidth: 260, alignment: .leading)
                 .allowsHitTesting(false)
                 Divider()
+            }
+
+            Button("Open Dashboard") {
+                recorder.openDashboard()
             }
 
             Button("Open Notes Folder") {

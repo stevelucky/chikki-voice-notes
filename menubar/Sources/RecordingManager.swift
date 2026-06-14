@@ -2,30 +2,90 @@ import Foundation
 import SwiftUI
 import UserNotifications
 
+/// Thread-safe holder for a running subprocess, so the processing pipeline's
+/// Process (created on a background thread) can be terminated from the main actor.
+final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    func set(_ p: Process?) { lock.lock(); process = p; lock.unlock() }
+    func terminate() { lock.lock(); process?.terminate(); process = nil; lock.unlock() }
+}
+
+/// Thread-safe line accumulator for streamed pipe output. Carries a partial last
+/// line across reads so a stage-marker JSON object split across a pipe-read
+/// boundary still parses, and collects the full log for error reporting.
+final class LineAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var carry = ""
+    private var allLines: [String] = []
+
+    /// Feed a chunk; returns the newly completed (trimmed, non-empty) lines.
+    func feed(_ chunk: String) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        carry += chunk
+        let parts = carry.components(separatedBy: "\n")
+        carry = parts.last ?? ""  // last element is the (possibly partial) remainder
+        var completed: [String] = []
+        for part in parts.dropLast() {
+            let t = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { completed.append(t); allLines.append(t) }
+        }
+        return completed
+    }
+
+    /// Flush any buffered remainder as a final line.
+    func flush() {
+        lock.lock(); defer { lock.unlock() }
+        let t = carry.trimmingCharacters(in: .whitespacesAndNewlines)
+        carry = ""
+        if !t.isEmpty { allLines.append(t) }
+    }
+
+    var joined: String {
+        lock.lock(); defer { lock.unlock() }
+        return allLines.joined(separator: "\n")
+    }
+}
+
+/// The menu-bar icon image, kept in its own observable so the per-second icon
+/// refresh updates ONLY the menu-bar label — never the dropdown menu. Mutating a
+/// @Published on RecordingManager while the dropdown is open re-bridges the whole
+/// NSMenu and scrambles AppKit's hover highlighting (items "hop").
+@MainActor final class StatusIconModel: ObservableObject {
+    @Published var image: NSImage
+    init(image: NSImage) { self.image = image }
+}
+
 @MainActor
 class RecordingManager: ObservableObject {
     static let shared = RecordingManager()
 
     @Published var isRecording = false
-    @Published var elapsedSeconds: Int = 0
-    @Published var recordingBarIcon: NSImage = NSImage()
     @Published var lastNote: String?
     @Published var isProcessing = false
     @Published var processingStage: String = ""  // raw stage key from Python
     @Published var processingDetail: String = ""
-    @Published var processingElapsed: Int = 0
     @Published var completedStages: Set<String> = []
     @Published var projectDir: String
     @Published var llmProvider: String = "LLM"
     @Published var lastError: String?
 
-    private var recordProcess: Process?
-    private var timer: Timer?
-    private var processingTimer: Timer?
-    private var sleepAssertion: NSObjectProtocol?
+    // Per-second timer state lives OFF the @Published graph the dropdown observes.
+    let statusIcon = StatusIconModel(image: ScribeApp.idleMicIcon)
+    private var elapsedSeconds: Int = 0
 
-    private let condaEnv = "chikki"
+    private var recordProcess: Process?
+    private let dashboardPort = 8765
+    private var timer: Timer?
+    private var sleepAssertion: NSObjectProtocol?
+    private let pipelineProcessBox = ProcessBox()
+    // Snapshot of recordings/*.wav at the moment recording started, so cancel
+    // only deletes a file this session actually created.
+    private var recordingsAtStart: Set<String> = []
+
     private static let projectDirKey = "projectDir"
+    nonisolated static let condaEnvKey = "condaEnv"
+    nonisolated static let defaultCondaEnv = "scribe"
 
     private init() {
         if let saved = UserDefaults.standard.string(forKey: Self.projectDirKey),
@@ -81,9 +141,9 @@ class RecordingManager: ObservableObject {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let fallbacks = [
             "\(home)/scribe-notes",
-            "\(home)/chikki",
-            "\(home)/codes/chikki",
-            "\(home)/Documents/chikki",
+            "\(home)/App_Development/scribe-notes",
+            "\(home)/Documents/scribe-notes",
+            "\(home)/codes/scribe-notes",
         ]
         for path in fallbacks {
             if FileManager.default.fileExists(atPath: path + "/config.yaml") {
@@ -104,17 +164,33 @@ class RecordingManager: ObservableObject {
 
     func startRecording() async {
         guard !isRecording else { return }
+        guard !isProcessing else {
+            sendNotification(title: "Scribe", body: "Still processing the last recording — try again in a moment.")
+            return
+        }
+
+        // Snapshot existing recordings so a later cancel deletes only what we create.
+        recordingsAtStart = currentRecordingFilenames()
+
+        // Launch the recorder FIRST; only enter the recording state if it starts,
+        // so a misconfigured env can't leave the app stuck in a phantom recording.
+        guard let proc = runCLI(args: ["record", "--duration", "0"], background: true) else {
+            recordingsAtStart = []
+            lastError = "Failed to launch the recorder. Check the project folder and conda env in Settings."
+            sendNotification(title: "Scribe", body: "Couldn't start recording — check Settings (project folder / conda env).")
+            return
+        }
+        recordProcess = proc
 
         isRecording = true
         elapsedSeconds = 0
 
-        recordingBarIcon = Self.makeRecordingPillIcon(time: formattedTime)
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.elapsedSeconds += 1
-                self.recordingBarIcon = Self.makeRecordingPillIcon(time: self.formattedTime)
-            }
+        // Per-second updates go to statusIcon only (not the dropdown's @Published graph).
+        statusIcon.image = Self.makeRecordingPillIcon(time: formattedTime)
+        timer = Self.makeCommonModeTimer(interval: 1) { [weak self] in
+            guard let self else { return }
+            self.elapsedSeconds += 1
+            self.statusIcon.image = Self.makeRecordingPillIcon(time: self.formattedTime)
         }
 
         sleepAssertion = ProcessInfo.processInfo.beginActivity(
@@ -123,7 +199,23 @@ class RecordingManager: ObservableObject {
         )
 
         sendNotification(title: "Scribe", body: "Recording started. Press Cmd+Shift+R to stop.")
-        recordProcess = runCLI(args: ["record", "--duration", "0"], background: true)
+    }
+
+    /// Filenames of *.wav currently in the recordings folder.
+    private func currentRecordingFilenames() -> Set<String> {
+        let path = "\(projectDir)/recordings"
+        let items = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+        return Set(items.filter { $0.hasSuffix(".wav") })
+    }
+
+    /// A repeating timer scheduled in `.common` run-loop mode so it keeps firing
+    /// while the menu bar popover is open (which runs in event-tracking mode).
+    private static func makeCommonModeTimer(interval: TimeInterval, _ tick: @escaping @MainActor () -> Void) -> Timer {
+        let t = Timer(timeInterval: interval, repeats: true) { _ in
+            Task { @MainActor in tick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        return t
     }
 
     private func endSleepAssertion() {
@@ -147,11 +239,24 @@ class RecordingManager: ObservableObject {
         // Signal Python and wait for it to flush the WAV to disk before processing
         if let proc, proc.isRunning {
             proc.interrupt()
-            await Task.detached { proc.waitUntilExit() }.value
+            await Self.waitForExit(proc, timeout: 15)
         }
 
+        recordingsAtStart = []
         sendNotification(title: "Scribe", body: "Recording stopped. Processing...")
         await processLatest()
+    }
+
+    /// Wait for a process to exit, but force-terminate it after `timeout` seconds
+    /// so a hung child can't block the UI flow forever.
+    nonisolated static func waitForExit(_ proc: Process, timeout: TimeInterval) async {
+        let waitTask = Task.detached { proc.waitUntilExit() }
+        let killTask = Task.detached {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if proc.isRunning { proc.terminate() }
+        }
+        await waitTask.value
+        killTask.cancel()
     }
 
     func cancelRecording() async {
@@ -167,28 +272,29 @@ class RecordingManager: ObservableObject {
 
         if let proc, proc.isRunning {
             proc.interrupt()
-            await Task.detached { proc.waitUntilExit() }.value
+            await Self.waitForExit(proc, timeout: 15)
         }
 
-        // Delete the most recent WAV — the one we just recorded
+        // Delete only WAVs that appeared during this session — never a prior
+        // recording (which is what happens if this session produced no file).
         let recordingsPath = "\(projectDir)/recordings"
-        if let latest = (try? FileManager.default.contentsOfDirectory(atPath: recordingsPath))?
-            .filter({ $0.hasSuffix(".wav") })
-            .sorted()
-            .last {
-            try? FileManager.default.removeItem(atPath: "\(recordingsPath)/\(latest)")
+        let created = currentRecordingFilenames().subtracting(recordingsAtStart)
+        for name in created {
+            try? FileManager.default.removeItem(atPath: "\(recordingsPath)/\(name)")
         }
+        recordingsAtStart = []
+        statusIcon.image = ScribeApp.idleMicIcon
 
-        sendNotification(title: "Scribe", body: "Recording cancelled and deleted.")
+        let msg = created.isEmpty ? "Recording cancelled." : "Recording cancelled and deleted."
+        sendNotification(title: "Scribe", body: msg)
     }
 
     func processLatest() async {
         let capturedProjectDir = projectDir
         let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
-        let condaBase = Self.findCondaBase()
-        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
+        let python = Self.pythonPath()
         let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
-        let cmd = "cd \"\(capturedProjectDir)\" && \"\(python)\" -m src.cli process-latest \(diarizeFlag)"
+        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process-latest \(diarizeFlag)"
         await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
     }
 
@@ -218,36 +324,36 @@ class RecordingManager: ObservableObject {
     func processAudioFile(at path: String) async {
         let capturedProjectDir = projectDir
         let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
-        let condaBase = Self.findCondaBase()
-        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
+        let python = Self.pythonPath()
         let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
         let escapedPath = path.replacingOccurrences(of: "\"", with: "\\\"")
-        let cmd = "cd \"\(capturedProjectDir)\" && \"\(python)\" -m src.cli process \"\(escapedPath)\" \(diarizeFlag)"
+        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process \"\(escapedPath)\" \(diarizeFlag)"
         await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
     }
 
     private func runPipeline(cmd: String, projectDir: String) async {
+        // Reentrancy guard: a single processing pipeline at a time. Without this,
+        // a second record/stop cycle could run two pipelines concurrently and
+        // leak/clobber the shared timer and state.
+        guard !isProcessing else {
+            sendNotification(title: "Scribe", body: "Already processing — please wait for the current note to finish.")
+            return
+        }
+
         isProcessing = true
         processingStage = ""
         processingDetail = ""
-        processingElapsed = 0
         completedStages = []
         lastError = nil
-
-        processingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.processingElapsed += 1
-            }
-        }
+        statusIcon.image = ScribeApp.processingPillIcon
 
         let capturedProjectDir = projectDir
         let (output, exitCode, stderrLog) = await Task.detached { [self] in
             return self.runSubprocessWithProgress(cmd: cmd, projectDir: capturedProjectDir)
         }.value
 
-        processingTimer?.invalidate()
-        processingTimer = nil
         isProcessing = false
+        statusIcon.image = ScribeApp.idleMicIcon
 
         if exitCode == 0, let output, !output.isEmpty {
             lastError = nil
@@ -286,38 +392,14 @@ class RecordingManager: ObservableObject {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        var stderrLines: [String] = []
-        let stderrLock = NSLock()
+        let stderr = LineAccumulator()
 
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty,
                   let chunk = String(data: data, encoding: .utf8) else { return }
-
-            for line in chunk.components(separatedBy: .newlines) {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
-
-                stderrLock.lock()
-                stderrLines.append(trimmed)
-                stderrLock.unlock()
-
-                // Parse JSON stage markers
-                guard let jsonData = trimmed.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                      let stage = obj["stage"] as? String else { continue }
-
-                let detail = obj["detail"] as? String ?? ""
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    let stageOrder = ["transcribing", "processing", "saving", "done"]
-                    if let idx = stageOrder.firstIndex(of: stage), idx > 0 {
-                        for i in 0..<idx { self.completedStages.insert(stageOrder[i]) }
-                    }
-                    if stage == "done" { self.completedStages.insert("saving") }
-                    self.processingStage = stage
-                    self.processingDetail = detail
-                }
+            for trimmed in stderr.feed(chunk) {
+                self?.handleStderrLine(trimmed)
             }
         }
 
@@ -326,21 +408,41 @@ class RecordingManager: ObservableObject {
         } catch {
             return (nil, -1, "Failed to launch process: \(error.localizedDescription)")
         }
+        pipelineProcessBox.set(process)  // allow termination on app quit
         process.waitUntilExit()
+        pipelineProcessBox.set(nil)
         errPipe.fileHandleForReading.readabilityHandler = nil
 
-        // Drain any remaining stderr
+        // Drain any remaining stderr (parse stage markers from it too, then flush
+        // the final partial line).
         let remaining = errPipe.fileHandleForReading.readDataToEndOfFile()
         if let s = String(data: remaining, encoding: .utf8), !s.isEmpty {
-            stderrLock.lock()
-            stderrLines.append(contentsOf: s.components(separatedBy: .newlines).filter { !$0.isEmpty })
-            stderrLock.unlock()
+            for trimmed in stderr.feed(s) { handleStderrLine(trimmed) }
         }
+        stderr.flush()
 
         let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let stderrLog = stderrLines.joined(separator: "\n")
-        return (stdout, process.terminationStatus, stderrLog)
+        return (stdout, process.terminationStatus, stderr.joined)
+    }
+
+    /// Parse a single stderr line as a JSON stage marker and update progress UI.
+    nonisolated private func handleStderrLine(_ trimmed: String) {
+        guard let jsonData = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let stage = obj["stage"] as? String else { return }
+
+        let detail = obj["detail"] as? String ?? ""
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let stageOrder = ["transcribing", "diarizing", "processing", "saving", "done"]
+            if let idx = stageOrder.firstIndex(of: stage), idx > 0 {
+                for i in 0..<idx { self.completedStages.insert(stageOrder[i]) }
+            }
+            if stage == "done" { self.completedStages.insert("saving") }
+            self.processingStage = stage
+            self.processingDetail = detail
+        }
     }
 
     // MARK: - Folder Access
@@ -364,13 +466,17 @@ class RecordingManager: ObservableObject {
     // MARK: - CLI Helpers
 
     private func shellCommand(args: [String]) -> String {
-        let condaBase = Self.findCondaBase()
-        let python = "\(condaBase)/envs/\(condaEnv)/bin/python"
+        let python = Self.pythonPath()
         let cliArgs = args.map { "\"\($0)\"" }.joined(separator: " ")
-        return "cd \"\(projectDir)\" && \"\(python)\" -m src.cli \(cliArgs)"
+        // `exec` replaces the zsh wrapper with Python (same PID) after the cd, so
+        // interrupt()/terminate() reach the Python process directly instead of
+        // killing only the shell and orphaning Python (which would keep the mic on).
+        return "cd \"\(projectDir)\" && exec \"\(python)\" -m src.cli \(cliArgs)"
     }
 
-    private func runCLI(args: [String], background: Bool = false) -> Process {
+    /// Launch a CLI subprocess. Returns nil if the process fails to launch, so
+    /// callers can avoid entering a phantom "running" state.
+    private func runCLI(args: [String], background: Bool = false) -> Process? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", shellCommand(args: args)]
@@ -390,7 +496,62 @@ class RecordingManager: ObservableObject {
             process.standardError = Pipe()
         }
 
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            lastError = "Failed to launch: \(error.localizedDescription)"
+            return nil
+        }
+        return process
+    }
+
+    // MARK: - Web dashboard
+
+    /// Start the local web dashboard (uvicorn) and open it in the browser.
+    ///
+    /// The server is launched DETACHED (`nohup … &`, reparented to launchd) with its
+    /// logs redirected to a file. That keeps it alive independent of this menu-bar
+    /// app's lifecycle (App Nap, process-group signals) and prevents a SIGPIPE death
+    /// from the inherited stderr — both of which were killing it, so a browser
+    /// refresh would hit a dead port. Any stale instance on the port is replaced.
+    func openDashboard() {
+        let python = Self.pythonPath()
+        let log = NSTemporaryDirectory() + "scribe-dashboard.log"
+        let cmd = "pkill -f 'uvicorn web.app:app --port \(dashboardPort)' 2>/dev/null; sleep 0.3; "
+                + "cd \"\(projectDir)\" && nohup \"\(python)\" -m uvicorn web.app:app --port \(dashboardPort) > \"\(log)\" 2>&1 &"
+        _ = runBackgroundShell(cmd)
+        // Give uvicorn a moment to bind before opening the browser.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            guard let self, let url = URL(string: "http://localhost:\(self.dashboardPort)") else { return }
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func stopDashboardServer() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        p.arguments = ["-f", "uvicorn web.app:app --port \(dashboardPort)"]
+        try? p.run()
+        p.waitUntilExit()
+    }
+
+    /// Apply the audio-retention policy now (deletes recordings past their age).
+    /// No-op when retention_days is 0. Cheap; safe to call on launch.
+    func runAudioCleanup() {
+        _ = runCLI(args: ["cleanup-audio"], background: true)
+    }
+
+    /// Launch a background shell command with the project env (PATH + .env merged).
+    private func runBackgroundShell(_ cmd: String) -> Process? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", cmd]
+        process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = ["/opt/homebrew/bin", "/usr/local/bin"].joined(separator: ":") + ":" + (env["PATH"] ?? "/usr/bin:/bin")
+        if let dotenvVars = loadDotEnv() { env.merge(dotenvVars) { _, new in new } }
+        process.environment = env
+        do { try process.run() } catch { return nil }
         return process
     }
 
@@ -445,6 +606,20 @@ class RecordingManager: ObservableObject {
         return "\(home)/miniconda3"
     }
 
+    /// The conda environment name. Single source of truth — overridable without a
+    /// rebuild via `defaults write com.local.scribe condaEnv <name>`. Defaults to
+    /// `scribe`; set the override to `chikki` to point at a legacy env.
+    nonisolated static func condaEnvName() -> String {
+        let stored = UserDefaults.standard.string(forKey: condaEnvKey)
+        if let stored, !stored.isEmpty { return stored }
+        return defaultCondaEnv
+    }
+
+    /// Absolute path to the Python interpreter inside the configured conda env.
+    nonisolated static func pythonPath() -> String {
+        "\(findCondaBase())/envs/\(condaEnvName())/bin/python"
+    }
+
     private func requestNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
@@ -470,15 +645,21 @@ class RecordingManager: ObservableObject {
         return .pending
     }
 
-    var formattedProcessingTime: String {
-        let m = processingElapsed / 60
-        let s = processingElapsed % 60
-        return String(format: "%02d:%02d", m, s)
-    }
-
     func terminateSubprocesses() {
         recordProcess?.terminate()
         recordProcess = nil
+        pipelineProcessBox.terminate()
+        stopDashboardServer()
+    }
+
+    /// Kill any orphaned `src.cli record` processes (e.g. left by a prior crash)
+    /// so the microphone isn't held across app restarts. Safe to call on launch.
+    nonisolated static func killOrphanedRecorders() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        p.arguments = ["-f", "src.cli record"]
+        try? p.run()
+        p.waitUntilExit()
     }
 
     static func makeRecordingPillIcon(time: String) -> NSImage {

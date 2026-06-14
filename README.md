@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="banner.jpg" alt="Chikki banner" width="100%">
+  <img src="banner.jpg" alt="Scribe banner" width="100%">
 </p>
 
-# 🍫 Chikki
+# 🍫 Scribe
 
 Local, private meeting transcription and notes for macOS.  
 Record → transcribe (on-device) → summarize (Gemini / OpenAI / Anthropic) → markdown notes.
@@ -32,8 +32,8 @@ Record → transcribe (on-device) → summarize (Gemini / OpenAI / Anthropic) �
 ## Install
 
 ```bash
-git clone https://github.com/yourusername/chikki.git
-cd chikki
+git clone https://github.com/yourusername/scribe-notes.git
+cd scribe-notes
 ./install.sh
 ```
 
@@ -46,7 +46,7 @@ After install, edit `.env` and add your API key. If not using Gemini, also updat
 ## Usage
 
 ```bash
-conda activate chikki
+conda activate scribe
 
 # Record + transcribe + summarize in one go (Ctrl+C to stop recording)
 python -m src.cli quick
@@ -88,7 +88,7 @@ python -m src.cli list-notes
 cd menubar && ./build.sh
 
 # Launch
-open menubar/build/Chikki.app
+open menubar/build/Scribe.app
 ```
 
 Click the mic icon to start/stop recording. Shows live progress stages during processing. Configure the global hotkey in the Settings panel.
@@ -189,7 +189,7 @@ Contributions are welcome! Here's how to get started:
 2. Run `./install.sh` to set up the environment
 3. Create a branch for your feature or fix
 4. Make your changes and add tests where applicable
-5. Run the tests: `conda run -n chikki python -m pytest tests/ -v`
+5. Run the tests: `conda run -n scribe python -m pytest tests/ -v`
 6. Open a pull request
 
 Some areas where help would be appreciated:

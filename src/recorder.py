@@ -114,22 +114,25 @@ class Recorder:
                 self._switch_stream()
 
     def _switch_stream(self):
-        """Replace the active audio stream with a new one on the current default device."""
+        """Replace the active audio stream with a new one on the current default device.
+
+        Stop the old stream *before* starting the new one so the two callbacks
+        can't both enqueue audio at once (which would interleave/duplicate frames
+        in the WAV). A brief gap during the switch is preferable to garbled audio.
+        """
         with self._stream_lock:
             old = self._stream
+            self._stream = None
+            if old is not None:
+                try:
+                    old.stop()
+                    old.close()
+                except Exception:
+                    pass
             try:
-                new = _open_stream(self._sample_rate, self._channels, self._callback)
+                self._stream = _open_stream(self._sample_rate, self._channels, self._callback)
             except Exception as e:
                 print(f"[recorder] Failed to open new stream: {e}", file=sys.stderr)
-                return
-            self._stream = new
-        # Stop the old stream outside the lock so its callback can finish cleanly.
-        if old is not None:
-            try:
-                old.stop()
-                old.close()
-            except Exception:
-                pass
 
     def start(self):
         with self._lock:
@@ -138,7 +141,9 @@ class Recorder:
 
             if self._output_path:
                 self._filepath = self._output_path
-                os.makedirs(os.path.dirname(self._filepath), exist_ok=True)
+                parent = os.path.dirname(self._filepath)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
             else:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"recording_{timestamp}.wav"
@@ -198,6 +203,12 @@ class Recorder:
             self._stop_writer.set()
             if self._writer_thread is not None:
                 self._writer_thread.join(timeout=10)
+                if self._writer_thread.is_alive():
+                    print(
+                        "[recorder] WARNING: writer thread did not drain within 10s; "
+                        "trailing audio may be lost.",
+                        file=sys.stderr,
+                    )
                 self._writer_thread = None
             self._write_queue = None
 
@@ -211,8 +222,13 @@ class Recorder:
                 pass
 
         if filepath and os.path.exists(filepath):
-            size = os.path.getsize(filepath)
-            if size > 44:
+            # A header-only float WAV is ~58 bytes (fact/PEAK chunks), so a byte
+            # threshold can't tell "empty" from "tiny". Check actual frames instead.
+            try:
+                frames = sf.info(filepath).frames
+            except Exception:
+                frames = os.path.getsize(filepath)  # fall back to bytes if unreadable
+            if frames > 0:
                 print(f"[recorder] Saved: {filepath} ({duration:.1f}s)", file=sys.stderr)
                 return filepath
             else:
@@ -221,7 +237,11 @@ class Recorder:
         return None
 
     def _emergency_save(self):
-        """Called by atexit — close the file so whatever was written is valid."""
+        """Called by atexit — close the file so whatever was written is valid.
+
+        Stop the audio stream and the writer thread before closing the file, so
+        the (daemon) writer can't race close() — SoundFile is not thread-safe.
+        """
         try:
             with self._stream_lock:
                 stream = self._stream
@@ -229,6 +249,11 @@ class Recorder:
             if stream is not None:
                 stream.stop()
                 stream.close()
+            # Signal the writer to stop and give it a moment to drain.
+            self._stop_writer.set()
+            writer = self._writer_thread
+            if writer is not None:
+                writer.join(timeout=2)
             if self._file is not None:
                 self._file.close()
                 self._file = None

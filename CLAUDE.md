@@ -2,11 +2,11 @@
 
 ## Project
 
-Chikki — voice recording, transcription, and meeting notes pipeline for macOS.
+Scribe — voice recording, transcription, and meeting notes pipeline for macOS.
 
 ## Stack
 
-- Python 3.13, conda env `chikki`
+- Python 3.13, conda env `scribe`
 - Recording: `sounddevice` + `soundfile` (incremental WAV writing, crash-safe)
 - Transcription: `mlx-whisper` (default), `parakeet-mlx`, ai4bharat IndicWhisper
 - LLM: Google Gemini / OpenAI / Anthropic (`google-genai` / `openai` / `anthropic`) — provider set via `config.yaml`, API key in `.env`
@@ -18,7 +18,7 @@ Chikki — voice recording, transcription, and meeting notes pipeline for macOS.
 
 Modular pipeline: `recorder -> transcriber -> processor -> output`
 
-Each stage is independent. Transcriber supports multiple engines (whisper, indicwhisper, parakeet) swappable via config or `--engine` CLI flag. Processor loads meeting-type-specific prompts from `prompts.json` (default, standup, strategy, one_on_one, brainstorm, interview). Output writes local markdown + raw transcript + exports to openclaw workspace.
+Each stage is independent. Transcriber supports multiple engines (whisper, indicwhisper, parakeet) swappable via config or `--engine` CLI flag. Processor loads meeting-type-specific prompts from `prompts.json` (default, standup, strategy, one_on_one, brainstorm, interview). Output writes a local markdown note (in `notes/`) plus the raw transcript as `.txt` and `.json` (in `transcripts/`) for reprocessing.
 
 ## Key Paths
 
@@ -35,7 +35,7 @@ Each stage is independent. Transcriber supports multiple engines (whisper, indic
 ## Commands
 
 ```bash
-conda activate chikki
+conda activate scribe
 python -m src.cli <command>
 ```
 
@@ -45,7 +45,7 @@ Key flags: `--engine/-e` (transcription engine), `--type/-t` (meeting type), `--
 
 ## Conventions
 
-- No venv — use conda env `chikki` (see `environment.yml`)
+- No venv — use conda env `scribe` (see `environment.yml`)
 - All config in `config.yaml`, API keys in `.env`
 - Prompts in `prompts.json`, not hardcoded in Python — edit freely
 - Raw transcripts always saved alongside notes for reprocessing

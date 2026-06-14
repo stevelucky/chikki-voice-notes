@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" class="bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scribe</title>
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    .htmx-indicator { opacity: 0; }
+    .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+    /* Fade a row out as it's archived (checked done) */
+    .item-row.htmx-swapping { opacity: 0; transition: opacity 200ms ease-out; }
+    /* "Clear completed": fade + collapse so siblings slide up to fill the gap */
+    .archiving {
+      overflow: hidden !important;
+      transition: max-height 300ms ease, opacity 180ms ease,
+                  padding 300ms ease, margin 300ms ease;
+    }
+    /* Markdown rendering for the AI brief (Tailwind Preflight strips defaults) */
+    .md h2 { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6366f1; margin: 1rem 0 .35rem; }
+    .md h2:first-child { margin-top: 0; }
+    .md ul { list-style: disc; padding-left: 1.25rem; margin: .25rem 0; }
+    .md ol { list-style: decimal; padding-left: 1.25rem; margin: .25rem 0; }
+    .md li { margin: .15rem 0; font-size: .875rem; color: #334155; }
+    .md p { font-size: .875rem; color: #334155; margin: .35rem 0; }
+    .md strong { font-weight: 600; color: #1e293b; }
+  </style>
+</head>
+<body class="text-slate-800 antialiased">
+  {% block content %}{% endblock %}
+  <script>
+    // "N selected" — live count of checked-but-not-yet-cleared items in view.
+    function scribeUpdateSelected() {
+      const list = document.getElementById('item-list');
+      const box = document.getElementById('selected-count');
+      if (!box) return;
+      const n = list ? list.querySelectorAll('input[type="checkbox"]:checked').length : 0;
+      const num = box.querySelector('[data-selected]');
+      if (num) num.textContent = n;
+      box.style.display = n > 0 ? '' : 'none';
+    }
+
+    // Refresh the header + tab badge counts from the server (source of truth).
+    function scribeRefreshCounts() {
+      fetch('/stats').then(r => r.json()).then(s => {
+        const set = (sel, v) => { const e = document.querySelector(sel); if (e && v !== undefined) e.textContent = v; };
+        set('#stat-open', s.open_action_items);
+        set('#stat-notes', s.note_count);
+        document.querySelectorAll('[data-badge]').forEach(el => {
+          const k = el.getAttribute('data-badge');
+          const v = (k === 'done') ? s.done : (s.buckets || {})[k];
+          if (v !== undefined) el.textContent = v;
+        });
+      }).catch(() => {});
+    }
+
+    // Fade + collapse an element to 0 height so siblings slide up to fill the gap.
+    function scribeCollapse(el) {
+      if (!el || el.classList.contains('archiving')) return;
+      el.style.maxHeight = el.offsetHeight + 'px';
+      el.classList.add('archiving');
+      requestAnimationFrame(() => {
+        el.style.maxHeight = '0px';
+        el.style.opacity = '0';
+        el.style.paddingTop = '0'; el.style.paddingBottom = '0';
+        el.style.marginTop = '0'; el.style.marginBottom = '0';
+      });
+      setTimeout(() => el.remove(), 340);
+    }
+
+    // Collapse a row out of view; if it was the last in its group, collapse the group.
+    function scribeRemoveRow(row) {
+      const section = row.closest('section');
+      if (section && section.querySelectorAll('.item-row').length <= 1) scribeCollapse(section);
+      else scribeCollapse(row);
+    }
+
+    // "Clear completed": animate out every checked row (or fully-checked group).
+    function scribeClearCompleted() {
+      const list = document.getElementById('item-list');
+      if (!list) return;
+      list.querySelectorAll('section').forEach(section => {
+        const rows = section.querySelectorAll('.item-row');
+        const checked = section.querySelectorAll('.item-row input[type="checkbox"]:checked');
+        if (rows.length && checked.length === rows.length) {
+          scribeCollapse(section);
+        } else {
+          checked.forEach(cb => scribeRemoveRow(cb.closest('.item-row')));
+        }
+      });
+      setTimeout(() => { scribeUpdateSelected(); scribeRefreshCounts(); }, 360);
+    }
+
+    // After a reassign, a row whose bucket no longer matches the current tab has
+    // moved — animate it out of this view.
+    function scribeReconcileMoved() {
+      const list = document.getElementById('item-list');
+      if (!list) return;
+      const view = list.getAttribute('data-view-bucket');
+      if (!view || view === 'done') return;  // the Done tab intentionally mixes buckets
+      list.querySelectorAll('.item-row[data-bucket]').forEach(row => {
+        if (row.getAttribute('data-bucket') !== view) scribeRemoveRow(row);
+      });
+    }
+
+    // Keep counts live without a page refresh.
+    document.body.addEventListener('change', (e) => {
+      if (e.target.matches('#item-list input[type="checkbox"]')) scribeUpdateSelected();
+    });
+    document.body.addEventListener('htmx:afterSwap', scribeReconcileMoved);
+    document.body.addEventListener('htmx:afterRequest', () => {
+      scribeUpdateSelected();
+      scribeRefreshCounts();
+    });
+    scribeUpdateSelected();
+  </script>
+</body>
+</html>

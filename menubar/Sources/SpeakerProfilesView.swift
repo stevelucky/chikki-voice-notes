@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// Thread-safe accumulator for streamed stderr, used to drain a child process's
+/// pipe without blocking on a full buffer.
+final class StderrBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = ""
+    func append(_ s: String) { lock.lock(); buffer += s; lock.unlock() }
+    var value: String { lock.lock(); defer { lock.unlock() }; return buffer }
+}
+
 struct SpeakerProfile: Identifiable, Codable {
     var id: String { name }
     var name: String
@@ -103,15 +112,23 @@ struct SpeakerProfilesView: View {
     }
 
     private func deleteSpeaker(_ name: String) {
-        let condaBase = RecordingManager.findCondaBase()
-        let python = "\(condaBase)/envs/chikki/bin/python"
-        let cmd = "cd \"\(projectDir)\" && \"\(python)\" -m src.cli delete-speaker \"\(name)\""
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", cmd]
-        try? process.run()
-        process.waitUntilExit()
-        loadProfiles()
+        let dir = projectDir
+        statusMessage = "Deleting \(name)…"
+        // Run off the main thread — launching python + imports would beachball the UI.
+        Task.detached {
+            let python = RecordingManager.pythonPath()
+            let escaped = name.replacingOccurrences(of: "\"", with: "\\\"")
+            let cmd = "cd \"\(dir)\" && \"\(python)\" -m src.cli delete-speaker \"\(escaped)\""
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-c", cmd]
+            try? process.run()
+            process.waitUntilExit()
+            await MainActor.run {
+                statusMessage = ""
+                loadProfiles()
+            }
+        }
     }
 }
 
@@ -199,15 +216,24 @@ struct AddSpeakerSheet: View {
         }
         .padding(20)
         .frame(width: 400)
+        .onDisappear {
+            // If the sheet is dismissed mid-recording, stop the recorder so the
+            // microphone isn't left running with no UI.
+            if recordingState == .recording, let proc = recordProcess, proc.isRunning {
+                proc.interrupt()
+                recordProcess = nil
+                recordingState = .idle
+            }
+        }
     }
 
     private func startRecording() {
         let tmpPath = NSTemporaryDirectory() + "scribe_sample_\(Int(Date().timeIntervalSince1970)).wav"
         recordedFilePath = tmpPath
 
-        let condaBase = RecordingManager.findCondaBase()
-        let python = "\(condaBase)/envs/chikki/bin/python"
-        let cmd = "cd \"\(projectDir)\" && \"\(python)\" -m src.cli record --duration 0 --output \"\(tmpPath)\""
+        let python = RecordingManager.pythonPath()
+        // exec so interrupt() on stop reaches Python directly (not just the zsh wrapper).
+        let cmd = "cd \"\(projectDir)\" && exec \"\(python)\" -m src.cli record --duration 0 --output \"\(tmpPath)\""
 
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
@@ -235,22 +261,24 @@ struct AddSpeakerSheet: View {
         isEnrolling = true
         enrollStatus = "Computing voice embedding..."
 
+        // Capture main-actor state into locals before detaching off the actor.
+        let escapedName = name.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedRole = role.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedNotes = notes.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedSample = recordedFilePath.replacingOccurrences(of: "\"", with: "\\\"")
+        let dir = projectDir
+
         Task.detached {
-            let condaBase = RecordingManager.findCondaBase()
-            let python = "\(condaBase)/envs/chikki/bin/python"
-            let escapedName = name.replacingOccurrences(of: "\"", with: "\\\"")
-            let escapedRole = role.replacingOccurrences(of: "\"", with: "\\\"")
-            let escapedNotes = notes.replacingOccurrences(of: "\"", with: "\\\"")
-            let escapedSample = recordedFilePath.replacingOccurrences(of: "\"", with: "\\\"")
+            let python = RecordingManager.pythonPath()
             let cmd = """
-                cd "\(projectDir)" && "\(python)" -m src.cli enroll-speaker "\(escapedSample)" \
+                cd "\(dir)" && "\(python)" -m src.cli enroll-speaker "\(escapedSample)" \
                 --name "\(escapedName)" --role "\(escapedRole)" --notes "\(escapedNotes)"
                 """
 
             var env = ProcessInfo.processInfo.environment
             let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
             env["PATH"] = extraPaths.joined(separator: ":") + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-            if let dotenv = RecordingManager.parseDotEnvStatic(at: "\(projectDir)/.env") {
+            if let dotenv = RecordingManager.parseDotEnvStatic(at: "\(dir)/.env") {
                 env.merge(dotenv) { _, new in new }
             }
 
@@ -261,25 +289,42 @@ struct AddSpeakerSheet: View {
             let errPipe = Pipe()
             process.standardError = errPipe
 
+            // Drain stderr continuously. enroll-speaker streams a spinner plus
+            // HuggingFace model-download progress to stderr; if we only read after
+            // waitUntilExit(), a full 64KB pipe buffer would block the child and
+            // deadlock. Accumulate into a thread-safe buffer instead.
+            let errBuffer = StderrBuffer()
+            errPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                if !data.isEmpty, let s = String(data: data, encoding: .utf8) {
+                    errBuffer.append(s)
+                }
+            }
+
             do {
                 try process.run()
                 process.waitUntilExit()
             } catch {
+                errPipe.fileHandleForReading.readabilityHandler = nil
                 await MainActor.run {
                     self.enrollStatus = "Failed: \(error.localizedDescription)"
                     self.isEnrolling = false
                 }
                 return
             }
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            // Drain anything buffered after the handler was removed.
+            let tail = errPipe.fileHandleForReading.readDataToEndOfFile()
+            if let s = String(data: tail, encoding: .utf8) { errBuffer.append(s) }
 
             let success = process.terminationStatus == 0
+            let errOutput = errBuffer.value
             await MainActor.run {
                 self.isEnrolling = false
                 if success {
                     self.enrollStatus = "✓ Enrolled successfully"
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.dismiss() }
                 } else {
-                    let errOutput = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                     let lastLine = errOutput.components(separatedBy: .newlines).filter { !$0.isEmpty }.last ?? "Unknown error"
                     self.enrollStatus = "Error: \(lastLine)"
                 }

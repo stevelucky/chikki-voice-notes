@@ -1,0 +1,129 @@
+# Scribe — Front-End Roadmap
+
+A consumption/synthesis layer on top of the existing capture pipeline. The menu-bar
+app captures and processes audio into markdown notes; this front end turns that
+growing pile of notes into a live operating picture.
+
+## Principles
+
+1. **Markdown stays the source of truth.** The front end is a lens and a writer,
+   never a second database. Checking off / reassigning a to-do edits the source `.md`.
+   This keeps the Obsidian workflow intact and avoids lock-in.
+2. **Zero data entry.** Structure comes automatically from the voice → LLM pipeline
+   (frontmatter: title/date/topics/action_items/decisions). The UI aggregates and
+   presents; the user never re-types.
+3. **Local-first & private.** Runs locally against the notes folder. No cloud sync.
+4. **Reuse the Python stack.** Config, parsing, and the Claude integration already
+   exist; the web layer builds on them.
+
+## Architecture & stack
+
+- **Backend:** FastAPI (Python, `scribe` conda env), reusing `src/notes_index.py`
+  for parsing notes/frontmatter/action-items and markdown write-back; `src/brief.py`
+  for the AI brief.
+- **Front end:** server-rendered HTML with **htmx** + **Tailwind** + a little vanilla
+  JS for animations and live counts. No Node toolchain.
+- **AI:** reuses the Claude integration + the notes corpus.
+- **Run:** **Open Dashboard** from the menu-bar app (launches a *persistent, detached*
+  uvicorn on `:8765` and opens the browser). For dev: `uvicorn web.app:app --reload`
+  → `localhost:8000`.
+
+## Status at a glance
+
+- **Phase 1 — Action Center:** ✅ shipped (+ extensive UX polish)
+- **Phase 2 — This Week brief:** ✅ shipped
+- **Phase 3 — Entities:** ⬜ not started
+- **Phase 4 — Ask-your-notes chat:** ⬜ not started
+- **Phase 5 — Reading & browse:** ⬜ not started
+- Pipeline/infra side-quests (extraction tightening, retention, server persistence,
+  identity settings, favicon): ✅ shipped
+
+---
+
+## Phase 1 — Action-item command center  ✅
+
+- [x] `src/notes_index.py` — shared parser (frontmatter + action items w/ owner,
+      deadline, source, line number) and markdown write-back.
+- [x] FastAPI app + Action Center at `/actions`, grouped by note.
+- [x] Check-off writes `- [ ]` → `- [x]` (verified round-trip).
+- [x] **Identity + buckets** — collapse the user's many owner labels into one
+      identity (`user.name`/`aliases`, editable in **Settings → Identity**); split
+      into **Mine / Others / Unassigned**, default Mine. SPEAKER_NN → Unassigned.
+- [x] **Reassign owners** — per-item dropdown writes back and re-buckets; the row
+      **animates out of the current tab** when its bucket changes.
+- [x] **Done model** — checking strikes a row in place (reversible by un-checking);
+      a sticky **Clear completed** button sweeps checked rows to the **Done** tab with
+      a fade + slide-up animation; Done tab lets you un-check to restore.
+- [x] **Sticky header** — stats line, tabs, Clear-completed button, and search stay
+      pinned while the list scrolls.
+- [x] **Live counts** — header total, per-tab badges (via `/stats`), and a live
+      **"N selected"** indicator update without a page refresh.
+- [x] Text search; browser ghost-check fixed (`autocomplete=off`).
+- [ ] Nice-to-have: sort options (by deadline / recency / note).
+
+## Phase 2 — This Week brief  ✅
+
+- [x] **This Week** is the landing page (`/`); top nav switches to Action Center.
+- [x] **AI brief** (`src/brief.py`) — second-person LLM narrative (the gist / your
+      next actions / waiting on / deadlines) from the last 30 days, cached to
+      `.scribe_brief.json`, with a Refresh button.
+- [x] Deterministic sections: **Deadlines** and **Recent meetings** (last 30 days).
+- [x] Today's date shown on the header.
+- [x] **Deadline date-parsing** (`dateparser`) — freeform deadlines ("by Sept 1",
+      "next week", "Week of …") are parsed relative to the meeting date; the
+      Deadlines section now **sorts by urgency** (overdue → soon → later → undated)
+      and **color-codes** (red overdue / amber within 7d / slate dated / gray
+      undated) with relative labels ("37d overdue", "in 3 days", "Aug 1"). Vague
+      strings (project phases, conditions) stay undated.
+- [ ] **Weekly update archive** *(requested)* — make the brief a dated, saved weekly
+      artifact and let the user browse **past weekly updates** as a running record of
+      "where things stood." Implies storing dated briefs (not one rolling cache) plus
+      a history view; also resolves the "This Week" vs 30-day-window naming tension.
+- [ ] (Optional) scheduled/auto-generation of the brief.
+
+## Pipeline & capture-app work done along the way  ✅
+
+- [x] **Extraction tightened** across all 6 meeting types: only explicit, concrete
+      commitments; `null` owner when unclear (no guessing).
+- [x] `reprocess-all` CLI to re-extract existing notes in place.
+      **Limitation found:** notes whose transcript (and original audio) no longer
+      exist can't be reprocessed — most of the legacy backlog is in that bucket, so
+      it ages out via recency rather than cleanup.
+- [x] **Audio retention** — `recording.retention_days` + Settings picker; auto-prune.
+- [x] **Identity settings** — Name + aliases in Settings (new installs start blank).
+- [x] **Persistent dashboard server** — detached launch so browser refresh works.
+- [x] **Favicon** — small generated icon in `web/static/`.
+
+---
+
+## Phase 3 — Entities  ⬜
+
+- [ ] Extract people / companies / projects (frontmatter owners + an LLM pass).
+- [ ] Entity pages aggregating every mention, action item, and decision for a
+      person/company ("everything Service Titan", "every call with Doug").
+- [ ] Consolidate the **MCP server's note parsing onto `src/notes_index.py`** (it
+      still has its own copy).
+
+## Phase 4 — Ask-your-notes chat  ⬜
+
+- [ ] Chat panel with streaming answers over the whole corpus.
+- [ ] Citations linking back to source notes.
+- [ ] Reuse provider config from `config.yaml` (the MCP server already proves the
+      retrieval; this makes it first-class in the app).
+
+## Phase 5 — Reading & browse  ⬜
+
+- [ ] Note list with topic/date filters + full-text search.
+- [ ] Reader view with a frontmatter header card + rendered transcript.
+- [ ] Polish, theming.
+
+---
+
+## Comparison notes (what to borrow / skip)
+
+- **Granola:** organize by person/company; ask across meetings. *Borrow (→ Phase 3/4).*
+- **Notion:** database-with-views, rollups, relations. *Borrow the filtered-view +
+  rollup model (largely done in Phase 1); skip the generic editor & collaboration.*
+- **Mem/Reflect/Tana:** chat-with-notes, auto-linking. *Borrow RAG-over-corpus (→ Phase 4).*
+- **Don't rebuild:** generic editor, permissions/collab, or a fancier markdown
+  renderer — Obsidian already covers rendering.

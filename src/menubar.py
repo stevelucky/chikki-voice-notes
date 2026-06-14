@@ -1,4 +1,4 @@
-"""macOS menu bar app for Chikki voice recording.
+"""macOS menu bar app for Scribe voice recording.
 
 Shows a mic icon in the menu bar. Click or use hotkey to toggle recording.
 When recording stops, automatically transcribes and processes the audio.
@@ -17,9 +17,9 @@ from .output import write_note, format_slack_message
 from .config import CONFIG
 
 
-class ChikkiMenuBar(rumps.App):
+class ScribeMenuBar(rumps.App):
     def __init__(self):
-        super().__init__("Chikki", icon=None, title="🎙")
+        super().__init__("Scribe", icon=None, title="🎙")
         self.recorder = Recorder()
         self.transcriber = Transcriber()
         self.processor = Processor()
@@ -36,9 +36,9 @@ class ChikkiMenuBar(rumps.App):
             rumps.MenuItem("Settings...", callback=self._show_settings),
         ]
 
-        # Register global hotkey
-        hotkey_cfg = CONFIG.get("menubar", {}).get("hotkey", "command+shift+r")
-        rumps.Timer(self._update_timer, 1).start()
+        # Periodic timer to refresh the elapsed-time display while recording.
+        self._timer = rumps.Timer(self._update_timer, 1)
+        self._timer.start()
 
     def _toggle_recording(self, sender=None):
         if self.recorder.is_recording:
@@ -54,7 +54,7 @@ class ChikkiMenuBar(rumps.App):
         if CONFIG.get("menubar", {}).get("sound_on_start", True):
             os.system("afplay /System/Library/Sounds/Tink.aiff &")
         rumps.notification(
-            title="Chikki",
+            title="Scribe",
             subtitle="Recording started",
             message="Click the menu bar icon or use hotkey to stop.",
         )
@@ -71,7 +71,7 @@ class ChikkiMenuBar(rumps.App):
 
         if audio_path:
             rumps.notification(
-                title="Chikki",
+                title="Scribe",
                 subtitle="Recording saved",
                 message="Transcribing and processing...",
             )
@@ -92,13 +92,13 @@ class ChikkiMenuBar(rumps.App):
             subtitle = f"{action_count} action items" if action_count else "Processed"
 
             rumps.notification(
-                title=f"Chikki: {title}",
+                title=f"Scribe: {title}",
                 subtitle=subtitle,
                 message=f"Note saved to {os.path.basename(note_path)}",
             )
         except Exception as e:
             rumps.notification(
-                title="Chikki: Error",
+                title="Scribe: Error",
                 subtitle="Processing failed",
                 message=str(e)[:100],
             )
@@ -126,7 +126,7 @@ class ChikkiMenuBar(rumps.App):
 
 
 def run():
-    ChikkiMenuBar().run()
+    ScribeMenuBar().run()
 
 
 if __name__ == "__main__":

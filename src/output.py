@@ -8,6 +8,16 @@ from datetime import datetime
 from .config import CONFIG
 
 
+def _yaml_str(value: str) -> str:
+    """Serialize a string as a safe single-line YAML scalar (properly quoted/escaped).
+
+    A JSON string literal is also a valid YAML double-quoted scalar, so json.dumps
+    gives correct quoting/escaping without yaml.safe_dump's trailing `...` document
+    marker.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _parse_recording_time(audio_path: str) -> datetime:
     """Extract datetime from recording filename, fall back to file mtime, then now."""
     fname = os.path.basename(audio_path)
@@ -41,16 +51,31 @@ def _format_duration(seconds: float) -> str:
     return f"{m}m {s}s"
 
 
-def write_note(processed: dict, transcript: dict, audio_path: str, duration: float = 0) -> str:
-    """Write a structured markdown note + raw transcript. Returns the note filepath."""
+def write_note(processed: dict, transcript: dict, audio_path: str, duration: float = 0,
+               *, base_name: str = None, timestamp=None) -> str:
+    """Write a structured markdown note + raw transcript. Returns the note filepath.
+
+    base_name / timestamp let callers (e.g. reprocess-all) overwrite an existing
+    note in place, preserving its filename and date instead of deriving new ones.
+    """
     notes_dir = CONFIG["output"]["notes_dir"]
     os.makedirs(notes_dir, exist_ok=True)
 
-    timestamp = _parse_recording_time(audio_path)
+    if timestamp is None:
+        timestamp = _parse_recording_time(audio_path)
     date_str = timestamp.strftime("%Y-%m-%d")
     time_str = timestamp.strftime("%H:%M")
-    title_safe = _safe_filename(processed.get("title", "Untitled"))
-    base_name = f"{timestamp.strftime('%Y%m%d_%H%M')}_{title_safe}"
+
+    if base_name is None:
+        title_safe = _safe_filename(processed.get("title", "Untitled"))
+        base_name = f"{timestamp.strftime('%Y%m%d_%H%M')}_{title_safe}"
+        # Avoid clobbering an existing note (same minute + title): append -2, -3, …
+        candidate = base_name
+        n = 2
+        while os.path.exists(os.path.join(notes_dir, f"{candidate}.md")):
+            candidate = f"{base_name}-{n}"
+            n += 1
+        base_name = candidate
     filename = f"{base_name}.md"
     filepath = os.path.join(notes_dir, filename)
 
@@ -65,17 +90,20 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     with open(transcript_json_path, "w") as f:
         json.dump(transcript, f, indent=2, ensure_ascii=False)
 
+    title = processed.get("title", "Untitled")
     lines = []
     lines.append("---")
-    lines.append(f"title: \"{processed.get('title', 'Untitled')}\"")
+    lines.append(f"title: {_yaml_str(title)}")
     lines.append(f"date: {date_str}")
     lines.append(f"time: {time_str}")
     meeting_type = processed.get("_meeting_type", "default")
     lines.append(f"type: {meeting_type}")
-    lines.append(f"transcript: \"{os.path.basename(transcript_path)}\"")
+    lines.append(f"transcript: {_yaml_str(os.path.basename(transcript_path))}")
     if duration:
-        lines.append(f"duration: \"{_format_duration(duration)}\"")
-    lines.append(f"audio: \"{os.path.basename(audio_path)}\"")
+        # duration may arrive as seconds (number) or a preformatted string (reprocess).
+        dur_str = duration if isinstance(duration, str) else _format_duration(duration)
+        lines.append(f"duration: {_yaml_str(dur_str)}")
+    lines.append(f"audio: {_yaml_str(os.path.basename(audio_path))}")
     lines.append(f"topics: {json.dumps(processed.get('topics', []))}")
     lines.append("---")
     lines.append("")
@@ -87,10 +115,12 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     lines.append("")
 
     # Render all sections from the processed output dynamically
-    _SKIP_KEYS = {"title", "summary", "topics", "_meeting_type"}
+    _SKIP_KEYS = {"title", "summary", "topics"}
 
     for key, value in processed.items():
-        if key in _SKIP_KEYS or not value:
+        # Skip rendered-elsewhere keys and any internal metadata (keys starting
+        # with "_", e.g. _meeting_type, _chunked, _section_count).
+        if key in _SKIP_KEYS or key.startswith("_") or not value:
             continue
 
         heading = key.replace("_", " ").title()
@@ -99,7 +129,7 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
             lines.append("## Action Items")
             for item in value:
                 if isinstance(item, dict):
-                    owner = item.get("owner", "unassigned")
+                    owner = item.get("owner") or "unassigned"
                     task = item.get("task", "")
                     deadline = item.get("deadline")
                     deadline_str = f" (by {deadline})" if deadline else ""
@@ -161,6 +191,22 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
                     lines.append(f"- {idea}")
             lines.append("")
 
+        elif key == "sections" and isinstance(value, list):
+            # Chunked long-meeting format: per-section recap with time ranges.
+            lines.append("## Sections")
+            for sec in value:
+                if isinstance(sec, dict):
+                    title = sec.get("title", "Section")
+                    minutes = sec.get("minutes", "")
+                    heading_suffix = f" ({minutes} min)" if minutes else ""
+                    lines.append(f"### {title}{heading_suffix}")
+                    if sec.get("summary"):
+                        lines.append(sec["summary"])
+                    lines.append("")
+                else:
+                    lines.append(f"- {sec}")
+            lines.append("")
+
         elif key == "key_responses" and isinstance(value, list):
             # Interview format
             lines.append("## Key Responses")
@@ -185,7 +231,7 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
                     lines.append(f"- {item}")
             lines.append("")
 
-        elif isinstance(value, str) and key not in _SKIP_KEYS:
+        elif isinstance(value, str):
             # Single string section (e.g. "context", "problem_statement", "overall_impression")
             lines.append(f"## {heading}")
             lines.append(value)
@@ -217,9 +263,12 @@ def format_slack_message(processed: dict, note_path: str) -> str:
         lines.append("")
         lines.append("*Action Items:*")
         for item in action_items:
-            owner = item.get("owner", "unassigned")
-            task = item.get("task", "")
-            lines.append(f"  - *{owner}*: {task}")
+            if isinstance(item, dict):
+                owner = item.get("owner") or "unassigned"
+                task = item.get("task", "")
+                lines.append(f"  - *{owner}*: {task}")
+            else:
+                lines.append(f"  - {item}")
 
     insights = processed.get("insights", [])
     if insights:

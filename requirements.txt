@@ -6,8 +6,8 @@ numpy>=1.26.0
 # Transcription - Whisper (default)
 mlx-whisper>=0.4.0
 
-# Transcription - Parakeet MLX (optional)
-# parakeet-mlx>=0.2.0
+# Transcription - Parakeet MLX (default engine in config.yaml)
+parakeet-mlx>=0.2.0
 
 # Speaker Diarization (optional)
 # pyannote.audio>=3.1.0
@@ -30,3 +30,17 @@ pyyaml>=6.0
 
 # CLI
 click>=8.1.0
+
+# MCP server (mcp_server.py)
+mcp>=1.0.0
+
+# Web front end (web/app.py)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+jinja2>=3.1
+python-multipart>=0.0.9
+markdown>=3.5
+dateparser>=1.2
+
+# Dev / tests
+pytest>=8.0

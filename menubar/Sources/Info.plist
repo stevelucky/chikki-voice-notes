@@ -18,6 +18,8 @@
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Scribe needs microphone access to record voice notes and meetings.</string>
 </dict>

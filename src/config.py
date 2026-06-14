@@ -10,13 +10,23 @@ if os.path.exists(_ENV_PATH):
     with open(_ENV_PATH) as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            # Support optional `export ` prefix.
+            if line.startswith("export "):
+                line = line[len("export "):]
+            key, _, value = line.partition("=")
+            value = value.strip()
+            # Strip inline comments only on unquoted values.
+            if value and value[0] not in "'\"" and "#" in value:
+                value = value.split("#", 1)[0].strip()
+            os.environ.setdefault(key.strip(), value.strip("'\""))
 
 def load_config():
     with open(_CONFIG_PATH) as f:
         cfg = yaml.safe_load(f)
+    if cfg is None:
+        raise ValueError(f"Config file is empty or invalid: {_CONFIG_PATH}")
     # Resolve relative dirs to absolute
     for key in ("recordings_dir",):
         if key in cfg.get("recording", {}):

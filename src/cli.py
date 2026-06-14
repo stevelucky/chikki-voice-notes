@@ -1,6 +1,7 @@
-"""CLI for Chikki — voice recording, transcription, and meeting notes."""
+"""CLI for Scribe — voice recording, transcription, and meeting notes."""
 
 import os
+import re
 import sys
 import time
 import signal
@@ -34,6 +35,58 @@ def _resolve_length(length, segments=None):
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
+def _effective_cap_seconds(duration: int) -> int:
+    """Resolve the recording cap in seconds.
+
+    An explicit --duration always wins. Otherwise fall back to the configured
+    recording.max_duration_minutes safety cap (0 = unlimited).
+    """
+    if duration:
+        return duration
+    minutes = CONFIG.get("recording", {}).get("max_duration_minutes", 0) or 0
+    return int(minutes * 60)
+
+
+def _audio_age_seconds(path: str) -> float:
+    """Age of an audio file — by its recording timestamp in the filename when
+    present (recording_YYYYMMDD_HHMMSS), else file mtime."""
+    m = re.search(r"(\d{8})_(\d{6})", os.path.basename(path))
+    if m:
+        from datetime import datetime
+        try:
+            ts = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+            return time.time() - ts.timestamp()
+        except ValueError:
+            pass
+    try:
+        return time.time() - os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _prune_old_audio() -> int:
+    """Delete recordings older than recording.retention_days. 0/absent = never."""
+    import glob
+    cfg = CONFIG.get("recording", {})
+    days = cfg.get("retention_days", 0) or 0
+    recordings_dir = cfg.get("recordings_dir")
+    if not days or days <= 0 or not recordings_dir or not os.path.isdir(recordings_dir):
+        return 0
+    cutoff = days * 86400
+    removed = 0
+    for ext in ("*.wav", "*.flac", "*.mp3", "*.m4a"):
+        for f in glob.glob(os.path.join(recordings_dir, ext)):
+            if _audio_age_seconds(f) > cutoff:
+                try:
+                    os.remove(f)
+                    removed += 1
+                except OSError:
+                    pass
+    if removed:
+        print(f"[retention] Deleted {removed} audio file(s) older than {days} days.", file=sys.stderr)
+    return removed
+
+
 def _compress_audio(wav_path: str):
     """Compress WAV to FLAC (lossless, ~50-60% smaller). Keeps original until verified."""
     import subprocess
@@ -60,8 +113,9 @@ def _compress_audio(wav_path: str):
         savings = 100 * (1 - flac_size / wav_size) if wav_size > 0 else 0
         os.remove(wav_path)
         print(f"[compress] {os.path.basename(wav_path)} → .flac ({savings:.0f}% smaller)", file=sys.stderr)
-    except Exception:
-        # If compression fails, keep the WAV
+    except Exception as e:
+        # If compression fails, keep the WAV and surface why.
+        print(f"[compress] failed for {os.path.basename(wav_path)} ({e}); keeping WAV.", file=sys.stderr)
         if os.path.exists(flac_path):
             os.remove(flac_path)
 
@@ -97,7 +151,7 @@ def live_timer(label: str):
 
 @click.group()
 def cli():
-    """Chikki - Voice recording, transcription, and meeting notes."""
+    """Scribe - Voice recording, transcription, and meeting notes."""
     pass
 
 
@@ -114,6 +168,7 @@ def record(duration, output):
 
     start = time.time()
     stopped = threading.Event()
+    cap = _effective_cap_seconds(duration)
 
     def handle_stop(sig, frame):
         stopped.set()
@@ -125,7 +180,8 @@ def record(duration, output):
             elapsed = int(time.time() - start)
             m, s = divmod(elapsed, 60)
             click.echo(f"\r  {m:02d}:{s:02d}", nl=False, err=True)
-            if duration and elapsed >= duration:
+            if cap and elapsed >= cap:
+                click.echo(f"\n[recorder] Reached max duration ({cap}s) — stopping.", err=True)
                 break
             stopped.wait(0.5)
     finally:
@@ -193,6 +249,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
     if do_diarize:
         from .diarizer import Diarizer, identify_and_merge
         from .config import _BASE_DIR
+        stage("diarizing", "Running pyannote pipeline...")
         with live_timer("Diarizing speakers"):
             d = Diarizer()
             speaker_segments = d.diarize(audio_path)
@@ -207,6 +264,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
     with live_timer("Saving note + compressing audio"):
         note_path = write_note(processed, transcript, audio_path, audio_dur)
         _compress_audio(audio_path)
+        _prune_old_audio()
 
     stage("done")
     title = processed.get('title', 'N/A')
@@ -225,8 +283,10 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
     print(title)
 
     if slack:
+        # stdout is reserved for the title (menu bar app reads it); send Slack
+        # preview to stderr.
         msg = format_slack_message(processed, note_path)
-        click.echo(f"\nSlack message:\n{msg}")
+        click.echo(f"\nSlack message:\n{msg}", err=True)
 
 
 @cli.command()
@@ -252,6 +312,7 @@ def quick(context, slack, duration, engine, meeting_type, length, diarize):
 
     start = time.time()
     stopped = threading.Event()
+    cap = _effective_cap_seconds(duration)
 
     def handle_stop(sig, frame):
         stopped.set()
@@ -262,8 +323,8 @@ def quick(context, slack, duration, engine, meeting_type, length, diarize):
         while not stopped.is_set():
             elapsed = int(time.time() - start)
             m, s = divmod(elapsed, 60)
-            click.echo(f"\r  {m:02d}:{s:02d}", nl=False)
-            if duration and elapsed >= duration:
+            click.echo(f"\r  {m:02d}:{s:02d}", nl=False, err=True)
+            if cap and elapsed >= cap:
                 break
             stopped.wait(0.5)
     finally:
@@ -316,6 +377,7 @@ def quick(context, slack, duration, engine, meeting_type, length, diarize):
     with live_timer("Saving note + compressing audio"):
         note_path = write_note(processed, transcript, audio_path, rec_duration)
         _compress_audio(audio_path)
+        _prune_old_audio()
 
     click.echo(click.style(f"\nTitle: {processed.get('title', 'N/A')}", fg="cyan", bold=True))
     click.echo(f"Summary: {processed.get('summary', 'N/A')}")
@@ -426,16 +488,20 @@ def process_latest(engine, diarize):
 
     recordings_dir = CONFIG["recording"]["recordings_dir"]
     if not os.path.exists(recordings_dir):
-        click.echo("No recordings found.")
-        return
+        click.echo("No recordings found.", err=True)
+        raise SystemExit(1)
 
+    import re as _re
+    # Only consider timestamped recordings (recording_YYYYMMDD_HHMMSS.wav) so a
+    # stray .wav dropped into the folder can't be picked as "latest".
+    _rec_re = _re.compile(r"^recording_\d{8}_\d{6}\.wav$")
     wavs = sorted(
-        [f for f in os.listdir(recordings_dir) if f.endswith(".wav")],
+        [f for f in os.listdir(recordings_dir) if _rec_re.match(f)],
         reverse=True,
     )
     if not wavs:
-        click.echo("No recordings found.")
-        return
+        click.echo("No recordings found.", err=True)
+        raise SystemExit(1)
 
     audio_path = os.path.join(recordings_dir, wavs[0])
 
@@ -473,6 +539,7 @@ def process_latest(engine, diarize):
 
     note_path = write_note(processed, transcript, audio_path, info.duration)
     _compress_audio(audio_path)
+    _prune_old_audio()
 
     title = processed.get("title", "Untitled")
     action_count = len(processed.get("action_items", []))
@@ -550,6 +617,102 @@ def delete_speaker(name):
     from .config import _BASE_DIR
     _delete(_BASE_DIR, name)
     click.echo(click.style(f"Deleted: {name}", fg="yellow"))
+
+
+@cli.command("cleanup-audio")
+def cleanup_audio():
+    """Delete audio files older than recording.retention_days (0 = never delete)."""
+    days = CONFIG.get("recording", {}).get("retention_days", 0) or 0
+    if not days or days <= 0:
+        click.echo("Retention is disabled (recording.retention_days = 0). Nothing deleted.", err=True)
+        return
+    n = _prune_old_audio()
+    click.echo(click.style(f"Deleted {n} audio file(s) older than {days} days.", fg="yellow"), err=True)
+
+
+@cli.command("reprocess-all")
+@click.option("--type", "-t", "force_type", default=None,
+              help="Force this meeting type for all notes (default: keep each note's type)")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
+def reprocess_all(force_type, yes):
+    """Re-run extraction on every saved transcript and OVERWRITE the notes in place.
+
+    Use after changing prompts to retroactively apply the new extraction. Each note
+    is regenerated from its transcript (same filename + date), so any manual edits
+    (checked-off items, reassignments) are lost.
+    """
+    import glob
+    import json as _json
+    from datetime import datetime
+    from .processor import Processor
+    from .output import write_note
+    from .notes_index import _parse_frontmatter
+
+    notes_dir = CONFIG["output"]["notes_dir"]
+    transcripts_dir = os.path.join(os.path.dirname(notes_dir), "transcripts")
+    jsons = sorted(glob.glob(os.path.join(transcripts_dir, "*.json")))
+    if not jsons:
+        click.echo("No transcripts found to reprocess.", err=True)
+        return
+    if not yes:
+        click.confirm(
+            f"Re-extract and OVERWRITE {len(jsons)} notes? Manual edits (checkmarks, "
+            f"reassignments) will be lost.", abort=True,
+        )
+
+    processors = {}
+
+    def _processor_for(mtype):
+        p = processors.get(mtype)
+        if p is None:
+            try:
+                p = Processor(meeting_type=mtype)
+            except ValueError:
+                p = processors.get("default") or Processor()
+                mtype = "default"
+            processors[mtype] = p
+        return p
+
+    done = 0
+    skipped_orphans = 0
+    for jpath in jsons:
+        base = os.path.splitext(os.path.basename(jpath))[0]
+        note_path = os.path.join(notes_dir, base + ".md")
+        # Only reprocess transcripts that still have a live note — never resurrect
+        # notes the user has deleted.
+        if not os.path.exists(note_path):
+            skipped_orphans += 1
+            continue
+        meta, _ = _parse_frontmatter(open(note_path, encoding="utf-8").read())
+        mtype = force_type or str(meta.get("type") or "default")
+        try:
+            transcript = _json.load(open(jpath, encoding="utf-8"))
+        except Exception as e:
+            click.echo(f"  skip {base}: unreadable transcript ({e})", err=True)
+            continue
+        if not transcript.get("text", "").strip():
+            click.echo(f"  skip {base}: empty transcript", err=True)
+            continue
+
+        ts = None
+        m = re.match(r"(\d{8})_(\d{4})", base)
+        if m:
+            try:
+                ts = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M")
+            except ValueError:
+                pass
+
+        p = _processor_for(mtype)
+        with live_timer(f"{base[:44]} ({p.type_name})"):
+            processed = p.process(transcript["text"])
+        write_note(processed, transcript, audio_path=str(meta.get("audio") or ""),
+                   duration=meta.get("duration") or 0, base_name=base, timestamp=ts)
+        done += 1
+
+    msg = f"\nReprocessed {done} notes."
+    if skipped_orphans:
+        msg += f" Skipped {skipped_orphans} orphan transcript(s) with no current note."
+    click.echo(click.style(msg, fg="green"), err=True)
 
 
 if __name__ == "__main__":
