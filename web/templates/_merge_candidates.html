@@ -1,0 +1,28 @@
+<form>
+  <input type="hidden" name="primary_filename" value="{{ primary_filename }}">
+  <input type="hidden" name="primary_line_no" value="{{ primary_line_no }}">
+  <input type="hidden" name="bucket" value="{{ bucket }}">
+  <input type="hidden" name="q" value="{{ q }}">
+  {% if candidates %}
+  <p class="text-[11px] text-ink-faint mb-1.5">Pick the to-dos that are really the same task — they'll fold into this one.</p>
+  <input type="text" placeholder="Filter to-dos…" oninput="scribeFilterMerge(this)"
+         class="w-full rounded-lg border border-line px-2.5 py-1.5 text-xs bg-surface mb-1.5
+                focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent/40">
+  <div class="max-h-56 overflow-auto rounded-lg border border-line divide-y divide-line">
+    {% for it in candidates %}
+    <label class="merge-cand flex items-start gap-2 px-2.5 py-1.5 hover:bg-paper cursor-pointer"
+           data-text="{{ (it.text ~ ' ' ~ it.note_title ~ ' ' ~ (it.owner or '')) | lower }}">
+      <input type="checkbox" name="member" value="{{ it.note_filename }}|{{ it.line_no }}"
+             class="mt-0.5 h-3.5 w-3.5 rounded border-line text-accent focus:ring-2 focus:ring-accent/40">
+      <span class="text-xs text-ink leading-snug">{{ it.text }}<span class="text-ink-faint"> · {{ it.note_title }}</span></span>
+    </label>
+    {% endfor %}
+  </div>
+  <button type="button" class="btn-primary mt-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold"
+          hx-post="/action-items/merge" hx-include="closest form" hx-target="#item-list" hx-swap="innerHTML">
+    Merge selected into this
+  </button>
+  {% else %}
+  <p class="text-[11px] text-ink-faint">No other open to-dos to merge with.</p>
+  {% endif %}
+</form>

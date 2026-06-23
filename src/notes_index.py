@@ -18,6 +18,71 @@ from .config import CONFIG
 _CHECKBOX_RE = re.compile(r"^(?P<indent>\s*)- \[(?P<mark>[ xX])\]\s+(?P<text>.*\S)\s*$")
 _OWNER_RE = re.compile(r"^\*\*(?P<owner>.+?)\*\*:\s*(?P<rest>.*)$")
 _DEADLINE_RE = re.compile(r"\s*\(by (?P<deadline>[^)]+)\)\s*$")
+# Per-item metadata (a user note, a merge-group tag) rides on the same line as
+# trailing HTML comments, so adding/editing it never shifts line numbers of other
+# items (which the write-back relies on). Comments are order-independent.
+# Body is "tempered" so it can't contain `-->`, so with several trailing comments
+# this matches only the LAST one (peeled off one per loop iteration).
+_TRAILING_COMMENT_RE = re.compile(r"\s*<!--\s*(?P<body>(?:(?!-->).)*?)\s*-->\s*$")
+_NOTE_BODY_RE = re.compile(r"^note:\s*(?P<note>.*)$", re.I | re.S)
+_MERGE_BODY_RE = re.compile(r"^merge:\s*(?P<gid>\S+)(?P<primary>\s+primary)?\s*$", re.I)
+
+
+def _parse_item(inner: str) -> dict:
+    """Parse the text inside a checkbox into its parts.
+
+    Returns {task, owner, deadline, note, merge_id, merge_primary}. Peels trailing
+    HTML comments (note / merge, any order) first, then the deadline suffix, then
+    the leading owner."""
+    text = inner.strip()
+    note = None
+    merge_id = ""
+    merge_primary = False
+    while True:
+        m = _TRAILING_COMMENT_RE.search(text)
+        if not m:
+            break
+        body = m.group("body")
+        mm = _MERGE_BODY_RE.match(body)
+        nm = _NOTE_BODY_RE.match(body)
+        if mm:
+            merge_id = mm.group("gid")
+            merge_primary = bool(mm.group("primary"))
+        elif nm:
+            note = nm.group("note").strip() or None
+        else:
+            break  # an unrelated trailing comment — leave it on the task text
+        text = text[: m.start()].rstrip()
+
+    deadline = None
+    m = _DEADLINE_RE.search(text)
+    if m:
+        deadline = m.group("deadline").strip()
+        text = text[: m.start()].rstrip()
+
+    owner = None
+    m = _OWNER_RE.match(text)
+    if m:
+        owner = m.group("owner").strip()
+        text = m.group("rest").strip()
+
+    return {"task": text, "owner": owner, "deadline": deadline,
+            "note": note, "merge_id": merge_id, "merge_primary": merge_primary}
+
+
+def _compose_item(task: str, owner: "str | None", deadline: "str | None",
+                  note: "str | None" = None, merge_id: str = "",
+                  merge_primary: bool = False) -> str:
+    """Rebuild a checkbox's inner text from its parts (inverse of _parse_item)."""
+    inner = f"**{owner}**: {task}" if owner else task
+    if deadline:
+        inner += f" (by {deadline})"
+    clean_note = " ".join((note or "").split()).replace("-->", "--").strip()
+    if clean_note:
+        inner += f" <!-- note: {clean_note} -->"
+    if merge_id:
+        inner += f" <!-- merge: {merge_id}{' primary' if merge_primary else ''} -->"
+    return inner
 
 
 def notes_dir() -> str:
@@ -77,7 +142,11 @@ class ActionItem:
     note_title: str
     note_date: str
     line_no: int       # 0-based line index in the source file (for write-back)
-    bucket: str = "unassigned"   # 'mine' | 'waiting' | 'unassigned'
+    bucket: str = "unassigned"   # 'mine' | 'waiting' | 'unassigned' | 'merged'
+    note: str = ""     # optional user-added annotation (stored inline in the .md)
+    merge_id: str = ""           # shared id when consolidated with other to-dos
+    merge_primary: bool = False  # the canonical row of its merge group
+    sources: list = field(default_factory=list)  # folded members (set at render)
 
 
 @dataclass
@@ -144,23 +213,27 @@ def load_notes() -> list[Note]:
     return notes
 
 
-def _split_action_item(inner: str) -> tuple[str, str | None, str | None]:
-    """From the text inside a checkbox, pull out (task, owner, deadline)."""
-    owner = None
-    deadline = None
-    text = inner.strip()
-
-    m = _DEADLINE_RE.search(text)
-    if m:
-        deadline = m.group("deadline").strip()
-        text = text[: m.start()].rstrip()
-
-    m = _OWNER_RE.match(text)
-    if m:
-        owner = m.group("owner").strip()
-        text = m.group("rest").strip()
-
-    return text, owner, deadline
+def _rewrite_item(filename: str, line_no: int, **changes) -> bool:
+    """Parse the action item at filename:line_no, apply field changes (owner / note /
+    merge_id / merge_primary), and rewrite the line in place — preserving everything
+    else and never shifting line numbers. Returns True on success."""
+    d = notes_dir()
+    path = os.path.normpath(os.path.join(d, filename))
+    if os.path.dirname(path) != os.path.normpath(d) or not os.path.isfile(path):
+        return False
+    lines = open(path, encoding="utf-8").read().split("\n")
+    if line_no < 0 or line_no >= len(lines):
+        return False
+    m = _CHECKBOX_RE.match(lines[line_no])
+    if not m:
+        return False
+    p = _parse_item(m.group("text"))
+    p.update(changes)
+    inner = _compose_item(p["task"], p["owner"], p["deadline"],
+                          p["note"], p["merge_id"], p["merge_primary"])
+    lines[line_no] = f"{m.group('indent')}- [{m.group('mark')}] {inner}"
+    open(path, "w", encoding="utf-8").write("\n".join(lines))
+    return True
 
 
 def action_items(include_done: bool = False) -> list[ActionItem]:
@@ -181,11 +254,14 @@ def action_items(include_done: bool = False) -> list[ActionItem]:
             if done and not include_done:
                 continue
             inner = m.group("text")
-            task, owner, deadline = _split_action_item(inner)
+            p = _parse_item(inner)
+            # Folded (non-primary) merge members are hidden from the normal buckets.
+            bucket = "merged" if (p["merge_id"] and not p["merge_primary"]) else classify_owner(p["owner"])
             items.append(ActionItem(
-                text=task, raw=inner, done=done, owner=owner, deadline=deadline,
+                text=p["task"], raw=inner, done=done, owner=p["owner"], deadline=p["deadline"],
                 note_filename=note.filename, note_title=note.title,
-                note_date=note.date, line_no=i, bucket=classify_owner(owner),
+                note_date=note.date, line_no=i, bucket=bucket,
+                note=p["note"] or "", merge_id=p["merge_id"], merge_primary=p["merge_primary"],
             ))
     return items
 
@@ -227,27 +303,26 @@ def known_people() -> list[str]:
 
 
 def set_owner(filename: str, line_no: int, owner: str) -> bool:
-    """Rewrite the owner of the action item at `filename:line_no` in the source
-    markdown, preserving the task text, deadline, indent, and checkbox state."""
-    d = notes_dir()
-    path = os.path.normpath(os.path.join(d, filename))
-    if os.path.dirname(path) != os.path.normpath(d) or not os.path.isfile(path):
-        return False
-    text = open(path, encoding="utf-8").read()
-    lines = text.split("\n")
-    if line_no < 0 or line_no >= len(lines):
-        return False
-    m = _CHECKBOX_RE.match(lines[line_no])
-    if not m:
-        return False
-    task, _old_owner, deadline = _split_action_item(m.group("text"))
+    """Rewrite the owner of the action item at `filename:line_no`, preserving task,
+    deadline, note, merge tag, indent, and checkbox state."""
     label = (owner or "").strip() or "unassigned"
-    inner = f"**{label}**: {task}"
-    if deadline:
-        inner += f" (by {deadline})"
-    lines[line_no] = f"{m.group('indent')}- [{m.group('mark')}] {inner}"
-    open(path, "w", encoding="utf-8").write("\n".join(lines))
-    return True
+    return _rewrite_item(filename, line_no, owner=label)
+
+
+def set_note(filename: str, line_no: int, note: str) -> bool:
+    """Add/replace/remove the inline note on the action item at filename:line_no."""
+    return _rewrite_item(filename, line_no, note=note)
+
+
+def set_merge(filename: str, line_no: int, merge_id: str, primary: bool = False) -> bool:
+    """Tag the action item at filename:line_no as part of merge group `merge_id`
+    (the `primary` one is the canonical/displayed row)."""
+    return _rewrite_item(filename, line_no, merge_id=merge_id, merge_primary=primary)
+
+
+def clear_merge(filename: str, line_no: int) -> bool:
+    """Remove any merge tag from the action item at filename:line_no (unmerge)."""
+    return _rewrite_item(filename, line_no, merge_id="", merge_primary=False)
 
 
 def _parse_note_date(value) -> "date | None":
@@ -341,7 +416,9 @@ def deadline_view(items: list[ActionItem], today: "date | None" = None) -> list[
 
 def stats() -> dict:
     notes = load_notes()
-    all_items = action_items(include_done=True)
+    # Folded merge members aren't counted — a consolidated group counts once,
+    # via its primary (which keeps its real owner bucket).
+    all_items = [it for it in action_items(include_done=True) if it.bucket != "merged"]
     open_items = [it for it in all_items if not it.done]
     counts = {"mine": 0, "waiting": 0, "unassigned": 0}
     for it in open_items:

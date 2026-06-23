@@ -1,0 +1,49 @@
+<div class="mb-1">
+{% if dupes.groups %}
+  <div class="flex items-center justify-between mb-2">
+    <span class="font-mono text-[11px] uppercase tracking-[.12em] text-accent">
+      Possible duplicates · <span id="dupes-count">{{ dupes.groups|length }}</span>
+    </span>
+    <button type="button" class="text-[11px] text-ink-faint hover:text-ink transition-colors"
+            onclick="document.getElementById('dupes-panel').innerHTML=''">Dismiss all</button>
+  </div>
+
+  {% for g in dupes.groups %}
+  <div class="dupe-group bg-surface rounded-xl border border-line p-3.5 mb-2">
+    <form>
+      <input type="hidden" name="bucket" value="{{ bucket }}">
+      <input type="hidden" name="q" value="{{ q }}">
+      <p class="text-sm font-medium text-ink mb-2">{{ g.label }}</p>
+      <div class="space-y-1.5 mb-2.5">
+        {% for m in g.members %}
+        <label class="flex items-start gap-2 text-xs cursor-pointer">
+          <input type="radio" name="primary_ref" value="{{ m.note_filename }}|{{ m.line_no }}"
+                 {% if loop.first %}checked{% endif %}
+                 class="mt-0.5 h-3.5 w-3.5 border-line text-accent focus:ring-2 focus:ring-accent/40">
+          <input type="hidden" name="ref" value="{{ m.note_filename }}|{{ m.line_no }}">
+          <span class="text-ink leading-snug">{{ m.text }}<span class="text-ink-faint"> · {{ m.note_title }}</span></span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="flex items-center gap-3">
+        <button type="button" class="btn-primary px-2.5 py-1 rounded-md text-[11px] font-semibold"
+                hx-post="/action-items/merge-group" hx-include="closest form"
+                hx-target="#item-list" hx-swap="innerHTML">
+          Merge these {{ g.members|length }}
+        </button>
+        <button type="button" class="text-[11px] text-ink-faint hover:text-ink transition-colors"
+                onclick="this.closest('.dupe-group').remove(); scribeAfterDupe();">Skip</button>
+        <span class="text-[10px] text-ink-faint">Selected = the one kept as the main to-do</span>
+      </div>
+    </form>
+  </div>
+  {% endfor %}
+
+{% else %}
+  <div class="bg-surface rounded-xl border border-line p-4 text-center text-sm text-ink-soft">
+    No duplicates found among your open to-dos{% if dupes.truncated %} (scanned the {{ dupes.scanned }} most recent){% endif %}.
+    <button type="button" class="ml-1 text-ink-faint hover:text-ink underline"
+            onclick="document.getElementById('dupes-panel').innerHTML=''">Dismiss</button>
+  </div>
+{% endif %}
+</div>

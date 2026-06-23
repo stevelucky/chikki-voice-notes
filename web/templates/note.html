@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+
+  <a href="/notes" class="inline-flex items-center gap-1 font-mono text-xs text-ink-faint hover:text-accent transition-colors">← All notes</a>
+
+  <header class="mt-3 mb-6">
+    <h1 class="font-display text-3xl sm:text-4xl font-semibold tracking-tight text-ink leading-tight">{{ title }}</h1>
+    <p class="mt-2 font-mono text-xs text-ink-faint">
+      {{ meta.date }}{% if meta.time %} · {{ meta.time }}{% endif %}{% if meta.type and meta.type != 'default' %} · {{ meta.type }}{% endif %}{% if meta.duration %} · {{ meta.duration }}{% endif %}
+    </p>
+  </header>
+
+  {% if result %}
+    {% if result.ok %}
+    <div class="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300 px-4 py-3 text-sm">
+      {% if result.undo %}
+        ↩ Reverted to the previous version of this note.
+      {% else %}
+        {% set kept = [] %}
+        {% if result.checkmarks_restored %}{% set _ = kept.append(result.checkmarks_restored ~ ' checkmark' ~ ('' if result.checkmarks_restored == 1 else 's')) %}{% endif %}
+        {% if result.notes_restored %}{% set _ = kept.append(result.notes_restored ~ ' note' ~ ('' if result.notes_restored == 1 else 's')) %}{% endif %}
+        ✓ Note regenerated with your correction{% if kept %} · {{ kept | join(' and ') }} restored{% endif %}.
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="mb-5 rounded-xl border border-red-200 bg-red-50 text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 px-4 py-3 text-sm">
+      {{ result.error }}
+    </div>
+    {% endif %}
+  {% endif %}
+
+  {% if diff %}
+  <details open class="mb-5 rounded-xl border border-line bg-surface overflow-hidden">
+    <summary class="cursor-pointer select-none px-4 py-2.5 font-mono text-[11px] uppercase tracking-wide text-ink-soft hover:bg-paper">
+      What changed <span class="text-ink-faint">— before / after</span>
+    </summary>
+    <div class="border-t border-line font-mono text-xs leading-relaxed overflow-x-auto">
+      {% for row in diff %}
+        {% if row.tag == 'hunk' %}
+        <div class="px-4 py-1 text-ink-faint bg-paper select-none">···</div>
+        {% elif row.tag == 'del' %}
+        <div class="px-4 py-0.5 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300 whitespace-pre-wrap break-words"><span class="select-none text-red-300 dark:text-red-500/60">- </span>{{ row.text }}</div>
+        {% elif row.tag == 'add' %}
+        <div class="px-4 py-0.5 bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300 whitespace-pre-wrap break-words"><span class="select-none text-emerald-400 dark:text-emerald-500/60">+ </span>{{ row.text }}</div>
+        {% else %}
+        <div class="px-4 py-0.5 text-ink-soft whitespace-pre-wrap break-words"><span class="select-none">&nbsp;&nbsp;</span>{{ row.text }}</div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+
+  <section class="mb-7 bg-surface rounded-2xl border border-line p-5">
+    <h2 class="font-mono text-[11px] uppercase tracking-[.12em] text-accent mb-2">Request a correction</h2>
+    <p class="text-xs text-ink-soft mb-3 leading-relaxed">
+      Describe what's wrong in plain English. Scribe re-reads the original transcript with your
+      correction as the source of truth and regenerates the whole note — fixing names, owners, the
+      summary, and decisions everywhere they appear. Your checked-off items are kept.
+    </p>
+    <form method="post" action="/note/correct">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <textarea name="correction" rows="3" required
+                placeholder="e.g. I'm the host of this meeting, not Dwight. Dwight is the client I was meeting with — swap the attribution everywhere."
+                class="w-full rounded-lg border border-line px-3 py-2 text-sm bg-paper/40
+                       focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent/40"></textarea>
+      <div class="mt-2 flex items-center gap-3">
+        <button type="submit"
+                class="px-3.5 py-1.5 rounded-lg bg-accent text-white text-sm font-semibold
+                       shadow-sm hover:bg-accent-hover transition-colors">
+          Apply correction
+        </button>
+        <span class="font-mono text-[11px] text-ink-faint">Re-runs the LLM — may take a few seconds.</span>
+      </div>
+    </form>
+    {% if has_backup %}
+    <form method="post" action="/note/undo" class="mt-3 pt-3 border-t border-line">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <button type="submit" class="font-mono text-[11px] text-ink-faint hover:text-ink transition-colors">
+        ↩ Undo last correction
+      </button>
+    </form>
+    {% endif %}
+  </section>
+
+  <article class="md bg-surface rounded-2xl border border-line p-6">
+    {{ body_html | safe }}
+  </article>
+
+  {% if transcript %}
+  <details class="mt-5">
+    <summary class="cursor-pointer select-none font-mono text-xs uppercase tracking-wide text-ink-soft hover:text-ink transition-colors">Transcript</summary>
+    <pre class="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-ink-soft bg-surface rounded-xl border border-line p-4 font-mono">{{ transcript }}</pre>
+  </details>
+  {% endif %}
+
+{% endblock %}

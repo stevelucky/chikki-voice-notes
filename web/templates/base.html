@@ -1,54 +1,245 @@
 <!doctype html>
-<html lang="en" class="bg-slate-50">
+<html lang="en" class="bg-paper">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scribe</title>
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+  <script>
+    // Apply the saved (or system, or ?theme=) preference before first paint.
+    (function () {
+      try {
+        var q = new URLSearchParams(location.search).get('theme');
+        if (q === 'dark' || q === 'light') localStorage.setItem('scribe-theme', q);
+        var t = q || localStorage.getItem('scribe-theme');
+        if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            paper:   'rgb(var(--c-paper) / <alpha-value>)',
+            surface: 'rgb(var(--c-surface) / <alpha-value>)',
+            ink: {
+              DEFAULT: 'rgb(var(--c-ink) / <alpha-value>)',
+              soft:    'rgb(var(--c-ink-soft) / <alpha-value>)',
+              faint:   'rgb(var(--c-ink-faint) / <alpha-value>)',
+            },
+            line: 'rgb(var(--c-line) / <alpha-value>)',
+            accent: {
+              DEFAULT: 'rgb(var(--c-accent) / <alpha-value>)',
+              hover:   'rgb(var(--c-accent-hover) / <alpha-value>)',
+              tint:    'rgb(var(--c-accent-tint) / <alpha-value>)',
+            },
+          },
+          fontFamily: {
+            display: ['Newsreader', 'Georgia', 'serif'],
+            sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
   <style>
+    :root {
+      --c-paper: 251 250 249;  --c-surface: 255 255 255;
+      --c-ink: 28 27 25;       --c-ink-soft: 87 83 78;   --c-ink-faint: 120 113 108;
+      --c-line: 236 232 226;
+      --c-accent: 29 53 87;    --c-accent-hover: 41 78 122;  --c-accent-tint: 237 241 246;
+      --c-accent-on: 255 255 255;
+    }
+    .dark {
+      --c-paper: 22 21 18;     --c-surface: 30 28 25;
+      --c-ink: 237 232 224;    --c-ink-soft: 176 169 159; --c-ink-faint: 138 130 120;
+      --c-line: 47 44 40;
+      --c-accent: 138 176 222; --c-accent-hover: 167 197 232; --c-accent-tint: 32 44 60;
+      --c-accent-on: 20 19 16;
+    }
+
     .htmx-indicator { opacity: 0; }
     .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
-    /* Fade a row out as it's archived (checked done) */
     .item-row.htmx-swapping { opacity: 0; transition: opacity 200ms ease-out; }
-    /* "Clear completed": fade + collapse so siblings slide up to fill the gap */
     .archiving {
       overflow: hidden !important;
       transition: max-height 300ms ease, opacity 180ms ease,
                   padding 300ms ease, margin 300ms ease;
     }
-    /* Markdown rendering for the AI brief (Tailwind Preflight strips defaults) */
-    .md h2 { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6366f1; margin: 1rem 0 .35rem; }
+
+    /* Primary action button — themed fill that flips with dark mode. */
+    .btn-primary { background: rgb(var(--c-accent)); color: rgb(var(--c-accent-on));
+      transition: background-color 150ms ease, opacity 150ms ease; }
+    .btn-primary:hover:not(:disabled) { background: rgb(var(--c-accent-hover)); }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* Busy/idle label swap for any htmx button (refresh, etc.). */
+    .lbl-busy { display: none; }
+    .htmx-request .lbl-idle { display: none; }
+    .htmx-request .lbl-busy { display: inline-flex; }
+    .spin { animation: scribe-spin .8s linear infinite; }
+    @keyframes scribe-spin { to { transform: rotate(360deg); } }
+
+    /* Hide the scrollbar on horizontally-scrollable strips (mobile tabs). */
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+
+    /* Waveform mark in the masthead — a nod to the audio the notes come from. */
+    .scribe-wave .wb {
+      fill: rgb(var(--c-accent)); transform-box: fill-box; transform-origin: center bottom;
+      animation: scribe-wb 1.5s ease-in-out infinite;
+    }
+    .scribe-wave .wb:nth-child(2) { animation-delay: .18s; }
+    .scribe-wave .wb:nth-child(3) { animation-delay: .36s; }
+    .scribe-wave .wb:nth-child(4) { animation-delay: .12s; }
+    @keyframes scribe-wb { 0%, 100% { transform: scaleY(.45); } 50% { transform: scaleY(1); } }
+
+    .lift { transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease; }
+    .lift:hover { transform: translateY(-1px); box-shadow: 0 6px 20px -12px rgba(0,0,0,.35); }
+
+    .eyebrow {
+      font-family: 'Newsreader', Georgia, serif; font-style: italic;
+      font-size: .9rem; color: rgb(var(--c-accent)); letter-spacing: .01em;
+      display: flex; align-items: baseline; gap: .75rem; margin-bottom: .85rem;
+    }
+    .eyebrow::after { content: ""; flex: 1; height: 1px; background: rgb(var(--c-line)); }
+
+    .brief-prose { font-family: 'Newsreader', Georgia, serif; color: rgb(var(--c-ink)); }
+    .brief-prose h2 { font-family: 'IBM Plex Sans', sans-serif; font-size: .7rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .08em; color: rgb(var(--c-accent)); margin: 1.25rem 0 .4rem; }
+    .brief-prose h2:first-child { margin-top: 0; }
+    .brief-prose p { font-size: 1.05rem; line-height: 1.65; margin: .5rem 0; }
+    .brief-prose ul { list-style: none; margin: .4rem 0; padding: 0; }
+    .brief-prose li { font-size: 1.02rem; line-height: 1.55; margin: .35rem 0; padding-left: 1.1rem; position: relative; }
+    .brief-prose li::before { content: ""; position: absolute; left: .1rem; top: .72em;
+      width: .35rem; height: .35rem; border-radius: 9999px; background: rgb(var(--c-accent)); }
+    .brief-prose strong { font-weight: 600; color: rgb(var(--c-ink)); }
+
+    .md { font-family: 'IBM Plex Sans', sans-serif; }
+    .md h1 { font-family: 'Newsreader', Georgia, serif; font-size: 1.4rem; font-weight: 600; color: rgb(var(--c-ink)); margin: 1rem 0 .5rem; }
+    .md h2 { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: rgb(var(--c-accent)); margin: 1.2rem 0 .4rem; }
     .md h2:first-child { margin-top: 0; }
-    .md ul { list-style: disc; padding-left: 1.25rem; margin: .25rem 0; }
-    .md ol { list-style: decimal; padding-left: 1.25rem; margin: .25rem 0; }
-    .md li { margin: .15rem 0; font-size: .875rem; color: #334155; }
-    .md p { font-size: .875rem; color: #334155; margin: .35rem 0; }
-    .md strong { font-weight: 600; color: #1e293b; }
+    .md h3 { font-size: .95rem; font-weight: 600; color: rgb(var(--c-ink)); margin: .7rem 0 .2rem; }
+    .md ul { list-style: disc; padding-left: 1.25rem; margin: .3rem 0; }
+    .md ol { list-style: decimal; padding-left: 1.25rem; margin: .3rem 0; }
+    .md li { margin: .2rem 0; font-size: .9rem; color: rgb(var(--c-ink-soft)); }
+    .md p { font-size: .9rem; color: rgb(var(--c-ink-soft)); line-height: 1.6; margin: .4rem 0; }
+    .md strong { font-weight: 600; color: rgb(var(--c-ink)); }
+    .md em { font-style: italic; }
+    .md a { color: rgb(var(--c-accent)); text-decoration: underline; }
+    .md ul ul { margin: .1rem 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .scribe-wave .wb { animation: none; transform: scaleY(.8); }
+      .lift, .btn-primary { transition: none; }
+      .lift:hover { transform: none; }
+      .spin { animation: none; }
+    }
   </style>
 </head>
-<body class="text-slate-800 antialiased">
-  {% block content %}{% endblock %}
+<body class="font-sans bg-paper text-ink antialiased min-h-dvh">
+
+  <header class="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-line">
+    <div class="max-w-3xl mx-auto px-5 h-14 flex items-center justify-between gap-3">
+      <a href="/" class="flex items-center gap-2.5 shrink-0" aria-label="Scribe — This Week">
+        <svg class="scribe-wave" width="22" height="18" viewBox="0 0 22 18" fill="none" aria-hidden="true">
+          <rect class="wb" x="1"  y="4" width="2.5" height="10" rx="1.25"/>
+          <rect class="wb" x="6"  y="1" width="2.5" height="16" rx="1.25"/>
+          <rect class="wb" x="11" y="5" width="2.5" height="8"  rx="1.25"/>
+          <rect class="wb" x="16" y="2" width="2.5" height="14" rx="1.25"/>
+        </svg>
+        <span class="font-display text-2xl font-semibold tracking-tight text-ink leading-none">Scribe</span>
+      </a>
+      <div class="flex items-center gap-1">
+        {% include "_nav.html" %}
+        <button type="button" onclick="scribeToggleTheme()" aria-label="Toggle dark mode"
+                class="ml-1 p-2 rounded-lg text-ink-soft hover:text-ink hover:bg-line/50 transition-colors">
+          <svg class="block dark:hidden" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>
+          </svg>
+          <svg class="hidden dark:block" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-5 py-8 sm:py-10">
+    {% block content %}{% endblock %}
+  </main>
+
   <script>
-    // "N selected" — live count of checked-but-not-yet-cleared items in view.
-    function scribeUpdateSelected() {
-      const list = document.getElementById('item-list');
-      const box = document.getElementById('selected-count');
-      if (!box) return;
-      const n = list ? list.querySelectorAll('input[type="checkbox"]:checked').length : 0;
-      const num = box.querySelector('[data-selected]');
-      if (num) num.textContent = n;
-      box.style.display = n > 0 ? '' : 'none';
+    function scribeToggleTheme() {
+      const dark = document.documentElement.classList.toggle('dark');
+      try { localStorage.setItem('scribe-theme', dark ? 'dark' : 'light'); } catch (e) {}
     }
 
-    // Refresh the header + tab badge counts from the server (source of truth).
+    // After a duplicate group is merged or skipped, recount the dupes panel and
+    // show a done-state once every group is resolved.
+    function scribeAfterDupe() {
+      const panel = document.getElementById('dupes-panel');
+      if (!panel) return;
+      const remaining = panel.querySelectorAll('.dupe-group').length;
+      const count = document.getElementById('dupes-count');
+      if (count) count.textContent = remaining;
+      if (remaining === 0) {
+        panel.innerHTML =
+          '<div class="bg-surface rounded-xl border border-line p-4 text-center text-sm text-ink-soft">All set — duplicates resolved.</div>';
+      }
+    }
+
+    // Client-side filter for the merge-candidate picker.
+    function scribeFilterMerge(input) {
+      const q = input.value.trim().toLowerCase();
+      const form = input.closest('form');
+      if (!form) return;
+      form.querySelectorAll('.merge-cand').forEach(el => {
+        el.style.display = (!q || (el.dataset.text || '').includes(q)) ? '' : 'none';
+      });
+    }
+
+    // "N selected" count + enable/disable the Clear-completed button.
+    function scribeUpdateSelected() {
+      const list = document.getElementById('item-list');
+      const n = list ? list.querySelectorAll('input[type="checkbox"]:checked').length : 0;
+      const box = document.getElementById('selected-count');
+      if (box) {
+        const num = box.querySelector('[data-selected]');
+        if (num) num.textContent = n;
+        box.style.display = n > 0 ? '' : 'none';
+      }
+      const clr = document.getElementById('clear-completed');
+      if (clr) {
+        clr.disabled = n === 0;
+        clr.title = n === 0 ? 'Check off items first' : 'Move checked-off items to the Done tab';
+      }
+    }
+
     function scribeRefreshCounts() {
       fetch('/stats').then(r => r.json()).then(s => {
         const set = (sel, v) => { const e = document.querySelector(sel); if (e && v !== undefined) e.textContent = v; };
         set('#stat-open', s.open_action_items);
         set('#stat-notes', s.note_count);
+        document.querySelectorAll('[data-open-count]').forEach(el => {
+          if (s.open_action_items !== undefined) {
+            el.textContent = s.open_action_items;
+            el.style.display = s.open_action_items > 0 ? '' : 'none';
+          }
+        });
         document.querySelectorAll('[data-badge]').forEach(el => {
           const k = el.getAttribute('data-badge');
           const v = (k === 'done') ? s.done : (s.buckets || {})[k];
@@ -57,7 +248,6 @@
       }).catch(() => {});
     }
 
-    // Fade + collapse an element to 0 height so siblings slide up to fill the gap.
     function scribeCollapse(el) {
       if (!el || el.classList.contains('archiving')) return;
       el.style.maxHeight = el.offsetHeight + 'px';
@@ -71,14 +261,12 @@
       setTimeout(() => el.remove(), 340);
     }
 
-    // Collapse a row out of view; if it was the last in its group, collapse the group.
     function scribeRemoveRow(row) {
       const section = row.closest('section');
       if (section && section.querySelectorAll('.item-row').length <= 1) scribeCollapse(section);
       else scribeCollapse(row);
     }
 
-    // "Clear completed": animate out every checked row (or fully-checked group).
     function scribeClearCompleted() {
       const list = document.getElementById('item-list');
       if (!list) return;
@@ -94,28 +282,33 @@
       setTimeout(() => { scribeUpdateSelected(); scribeRefreshCounts(); }, 360);
     }
 
-    // After a reassign, a row whose bucket no longer matches the current tab has
-    // moved — animate it out of this view.
     function scribeReconcileMoved() {
       const list = document.getElementById('item-list');
       if (!list) return;
       const view = list.getAttribute('data-view-bucket');
-      if (!view || view === 'done') return;  // the Done tab intentionally mixes buckets
+      if (!view || view === 'done') return;
       list.querySelectorAll('.item-row[data-bucket]').forEach(row => {
         if (row.getAttribute('data-bucket') !== view) scribeRemoveRow(row);
       });
     }
 
-    // Keep counts live without a page refresh.
     document.body.addEventListener('change', (e) => {
       if (e.target.matches('#item-list input[type="checkbox"]')) scribeUpdateSelected();
     });
     document.body.addEventListener('htmx:afterSwap', scribeReconcileMoved);
-    document.body.addEventListener('htmx:afterRequest', () => {
+    document.body.addEventListener('htmx:afterRequest', (e) => {
       scribeUpdateSelected();
       scribeRefreshCounts();
+      // A consolidated duplicate group: drop its card from the panel and recount.
+      const cfg = e.detail && e.detail.requestConfig;
+      if (e.detail && e.detail.successful && cfg && cfg.path === '/action-items/merge-group') {
+        const card = e.detail.elt && e.detail.elt.closest('.dupe-group');
+        if (card) card.remove();
+        scribeAfterDupe();
+      }
     });
     scribeUpdateSelected();
+    scribeRefreshCounts();
   </script>
 </body>
 </html>

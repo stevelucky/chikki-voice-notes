@@ -1,11 +1,12 @@
 {% if groups %}
   {% for g in groups %}
-  <section class="mb-5 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-    <div class="px-4 py-3 border-b border-slate-100 flex items-baseline justify-between gap-3">
-      <h2 class="font-semibold text-slate-900 truncate">{{ g.note_title }}</h2>
-      <span class="text-xs text-slate-400 whitespace-nowrap">{{ g.note_date }}</span>
+  <section class="mb-5 bg-surface rounded-xl shadow-sm border border-line overflow-hidden">
+    <div class="px-4 py-3 border-b border-line flex items-baseline justify-between gap-3 bg-paper/40">
+      <a href="/note?file={{ g.note_filename | urlencode }}"
+         class="font-display text-lg font-medium text-ink truncate hover:text-accent transition-colors">{{ g.note_title }}</a>
+      <span class="font-mono text-xs text-ink-faint whitespace-nowrap">{{ g.note_date }}</span>
     </div>
-    <ul class="divide-y divide-slate-100">
+    <ul class="divide-y divide-line">
       {% for item in g['items'] %}
         {% include "_item.html" %}
       {% endfor %}
@@ -13,5 +14,18 @@
   </section>
   {% endfor %}
 {% else %}
-  <div class="text-center text-slate-400 py-20 text-lg">{% if bucket == 'done' %}No completed items yet.{% else %}No open action items 🎉{% endif %}</div>
+  <div class="bg-surface rounded-xl border border-dashed border-line py-20 text-center">
+    <p class="font-display text-xl text-ink-soft">{% if bucket == 'done' %}Nothing completed yet.{% else %}You're all caught up.{% endif %}</p>
+    <p class="mt-1 text-sm text-ink-faint">{% if bucket == 'done' %}Checked-off items will collect here.{% else %}No open items in this view 🎉{% endif %}</p>
+  </div>
+{% endif %}
+
+{% if bucket == 'done' and done_total and done_shown < done_total %}
+<div class="mt-2 text-center">
+  <button class="btn-primary px-4 py-2 rounded-lg text-sm font-semibold"
+          hx-get="/items?bucket=done&show_all=1" hx-target="#item-list" hx-swap="innerHTML">
+    Show all {{ done_total }} completed
+  </button>
+  <p class="mt-2 font-mono text-[11px] text-ink-faint">Showing the {{ done_shown }} most recent · search to find older</p>
+</div>
 {% endif %}

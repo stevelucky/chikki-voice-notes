@@ -1,27 +1,36 @@
-<section id="ai-brief" class="mb-8">
+<section id="ai-brief" class="mb-9">
   {% if brief %}
-  <div class="bg-gradient-to-br from-indigo-50 to-white rounded-xl border border-indigo-100 p-5">
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="text-xs font-semibold text-indigo-600 uppercase tracking-wide">Your brief</h2>
-      <button class="text-xs text-indigo-600 hover:underline"
-              hx-post="/brief/generate" hx-target="#ai-brief" hx-swap="outerHTML" hx-indicator="#brief-spin">
-        Refresh
+  <article class="bg-surface rounded-2xl border border-line p-6 sm:p-7">
+    <div class="flex items-center justify-between mb-4">
+      <span class="font-mono text-[11px] uppercase tracking-[.12em] text-accent">Your brief</span>
+      <button class="font-mono text-[11px] uppercase tracking-wide text-ink-faint hover:text-accent transition-colors disabled:opacity-60"
+              hx-post="/brief/generate" hx-target="#ai-brief" hx-swap="outerHTML" hx-disabled-elt="this">
+        <span class="lbl-idle">↻ Refresh</span>
+        <span class="lbl-busy items-center gap-1.5 text-accent">
+          <svg class="spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+          Refreshing…
+        </span>
       </button>
     </div>
-    <div class="md">{{ brief_html | safe }}</div>
-    <div class="mt-3 text-xs text-slate-400">
-      Generated {{ brief.generated_at.replace("T", " ") }} from {{ brief.note_count }} recent notes
-      <span id="brief-spin" class="htmx-indicator">· refreshing…</span>
+    <div class="brief-prose">{{ brief_html | safe }}</div>
+    <div class="mt-5 pt-4 border-t border-line font-mono text-[11px] text-ink-faint">
+      Generated {{ brief.generated_at.replace("T", " ") }} · {{ brief.note_count }} recent notes
     </div>
-  </div>
+  </article>
   {% else %}
-  <div class="bg-white rounded-xl border border-dashed border-slate-300 p-6 text-center">
-    <p class="text-slate-500 text-sm mb-3">Generate an AI summary of your recent meetings — what happened, what you need to do next, and what's due.</p>
-    <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
-            hx-post="/brief/generate" hx-target="#ai-brief" hx-swap="outerHTML" hx-indicator="#brief-spin">
-      Generate brief
+  <article class="bg-surface rounded-2xl border border-dashed border-line p-8 text-center">
+    <p class="font-display text-lg text-ink-soft mb-1">Start your day with the gist.</p>
+    <p class="text-sm text-ink-faint mb-5 max-w-md mx-auto">A short read of your recent meetings — where things stand, what you need to do next, and what's coming due.</p>
+    <button class="btn-primary inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+            hx-post="/brief/generate" hx-target="#ai-brief" hx-swap="outerHTML" hx-disabled-elt="this">
+      <span class="lbl-idle">Generate brief</span>
+      <span class="lbl-busy items-center gap-2">
+        <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+        Generating… (~10s)
+      </span>
     </button>
-    <div id="brief-spin" class="htmx-indicator mt-2 text-xs text-slate-400">Thinking… (calls the LLM, ~10s)</div>
-  </div>
+  </article>
   {% endif %}
 </section>

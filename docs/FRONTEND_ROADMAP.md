@@ -96,6 +96,23 @@ growing pile of notes into a live operating picture.
 
 ---
 
+## Phone capture (record away from the laptop)  🟡 Mac side done
+
+Transport: record in **Voice Memos** → share the memo into a watched iCloud Drive
+folder → the Mac auto-imports it. (Chosen over a custom recorder for v1: Voice Memos
+already nails background recording, pause, low power, and crash-safety.)
+
+- [x] Pipeline accepts non-WAV imports — `_ensure_wav` transcodes m4a/etc. to 16kHz
+      mono via ffmpeg, then runs the normal transcribe → extract → note flow.
+- [x] **Folder watcher** in the menu-bar app — polls the watched folder, triggers
+      iCloud download of placeholders, imports one ready file per pass, then deletes
+      the shared copy on success (failures go to `_failed/` for retry). The processed
+      audio lands in `recordings/` and is governed by "Keep audio files" retention, so
+      the iCloud folder doesn't bloat. Settings: enable + pick folder.
+- [ ] Optional later: a custom SwiftUI **iOS app** (one-tap record/pause, m4a 16kHz,
+      background audio mode, auto-save to the same iCloud folder) — only if the Voice
+      Memos flow proves useful. Needs a paid Apple Developer account.
+
 ## Phase 3 — Entities  ⬜
 
 - [ ] Extract people / companies / projects (frontmatter owners + an LLM pass).

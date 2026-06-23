@@ -192,11 +192,17 @@ class Processor:
     def type_name(self):
         return self._type_name
 
-    def process(self, transcript_text: str, context: str = "") -> dict:
-        """Process transcript text into structured notes using the configured LLM provider."""
+    def process(self, transcript_text: str, context: str = "", correction: str = "") -> dict:
+        """Process transcript text into structured notes using the configured LLM provider.
+
+        correction: an authoritative user correction applied when regenerating an
+        existing note (e.g. fixing a reversed speaker/name attribution). It is
+        treated as ground truth that overrides the transcript where they conflict.
+        """
         print(
             f"[processor] Provider: {self._provider} | Type: {self._type_name} | "
-            f"Model: {self._model_name} | {len(transcript_text)} chars",
+            f"Model: {self._model_name} | {len(transcript_text)} chars"
+            f"{' | with correction' if correction else ''}",
             file=sys.stderr,
         )
 
@@ -204,6 +210,17 @@ class Processor:
         prompt += f"\nToday's date is {datetime.now().strftime('%Y-%m-%d')}"
         if context:
             prompt += f"\n\nAdditional context: {context}"
+        if correction:
+            prompt += (
+                "\n\n=== USER CORRECTION (AUTHORITATIVE) ===\n"
+                "The user reviewed an earlier version of these notes and is correcting a mistake. "
+                "Treat the following as ground truth: it OVERRIDES anything in the transcript that "
+                "conflicts with it (for example a reversed or mis-identified speaker/name). Apply it "
+                "consistently throughout the whole note — fix the title, the summary, every action "
+                "item owner, all decisions, and any quotes or names it affects. Do not reintroduce "
+                "the mistake anywhere.\n"
+                f"{correction.strip()}"
+            )
 
         raw = _call_llm(self._provider, self._model_name, self._system_prompt, prompt, self._temperature)
 
