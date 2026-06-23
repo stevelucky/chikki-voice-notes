@@ -31,6 +31,8 @@ struct SettingsView: View {
 
 struct GeneralTab: View {
     @AppStorage("projectDir") private var projectDir: String = ""
+    @AppStorage("watchFolderEnabled") private var watchEnabled: Bool = false
+    @AppStorage("watchFolderPath") private var watchPath: String = ""
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
     @State private var retentionDays: Int = 0
     @State private var userName: String = ""
@@ -71,6 +73,25 @@ struct GeneralTab: View {
                 Text("Older recordings are deleted automatically when you record, process, or launch Scribe. \"Forever\" never deletes.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Phone Recordings") {
+                Toggle("Import recordings from a folder", isOn: $watchEnabled)
+                    .onChange(of: watchEnabled) { _, _ in RecordingManager.shared.startWatchFolder() }
+                if watchEnabled {
+                    LabeledContent("Folder") {
+                        HStack(spacing: 8) {
+                            Text(watchPath.isEmpty ? "Not set" : (watchPath as NSString).abbreviatingWithTildeInPath)
+                                .font(.caption).foregroundColor(watchPath.isEmpty ? .red : .primary)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button("Choose…") { pickWatchFolder() }.controlSize(.small)
+                        }
+                    }
+                    Text("Record in Voice Memos, then share the memo into this iCloud folder. Scribe downloads, transcribes, and files each one automatically, then deletes the shared copy (your Voice Memos original stays on the phone; the processed audio in recordings/ is kept per “Keep audio files” above).")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Project Folder") {
@@ -117,6 +138,20 @@ struct GeneralTab: View {
             guard response == .OK, let url = panel.url else { return }
             projectDir = url.path
             Task { @MainActor in RecordingManager.shared.saveProjectDir(url.path) }
+        }
+    }
+
+    private func pickWatchFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select"
+        panel.message = "Pick a folder (e.g. an iCloud Drive folder) to import phone recordings from"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            watchPath = url.path
+            Task { @MainActor in RecordingManager.shared.startWatchFolder() }
         }
     }
 }

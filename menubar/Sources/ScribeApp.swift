@@ -111,6 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // so clean up any stragglers.
         RecordingManager.killOrphanedRecorders()
         RecordingManager.shared.runAudioCleanup()
+        RecordingManager.shared.startWatchFolder()
 
         KeyboardShortcuts.onKeyUp(for: .toggleRecording) {
             Task { await RecordingManager.shared.toggle() }

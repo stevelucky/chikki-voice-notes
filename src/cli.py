@@ -87,6 +87,46 @@ def _prune_old_audio() -> int:
     return removed
 
 
+def _ensure_wav(audio_path: str) -> str:
+    """Return a path to a 16kHz mono WAV for any input audio.
+
+    WAV inputs pass through unchanged. Other formats (e.g. m4a from the phone /
+    Voice Memos, mp3, etc.) are transcoded into recordings/ via ffmpeg, named with
+    the source file's timestamp so the note gets the right date. Returns the new
+    WAV path.
+    """
+    import shutil
+    import subprocess
+    from datetime import datetime
+
+    if audio_path.lower().endswith(".wav"):
+        return audio_path
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg is required to import non-WAV audio (brew install ffmpeg).")
+
+    recordings_dir = CONFIG["recording"]["recordings_dir"]
+    os.makedirs(recordings_dir, exist_ok=True)
+    try:
+        ts = datetime.fromtimestamp(os.path.getmtime(audio_path))
+    except OSError:
+        ts = datetime.now()
+    base = f"recording_{ts.strftime('%Y%m%d_%H%M%S')}"
+    out = os.path.join(recordings_dir, base + ".wav")
+    n = 2
+    while os.path.exists(out):
+        out = os.path.join(recordings_dir, f"{base}_{n}.wav")
+        n += 1
+
+    sr = CONFIG["recording"].get("sample_rate", 16000)
+    ch = CONFIG["recording"].get("channels", 1)
+    print(f"[import] Transcoding {os.path.basename(audio_path)} -> {os.path.basename(out)}", file=sys.stderr)
+    subprocess.run(
+        ["ffmpeg", "-i", audio_path, "-ar", str(sr), "-ac", str(ch), "-y", out],
+        capture_output=True, check=True,
+    )
+    return out
+
+
 def _compress_audio(wav_path: str):
     """Compress WAV to FLAC (lossless, ~50-60% smaller). Keeps original until verified."""
     import subprocess
@@ -158,11 +198,25 @@ def cli():
 @cli.command()
 @click.option("--duration", "-d", type=int, default=0, help="Max recording duration in seconds (0=unlimited)")
 @click.option("--output", "-o", default=None, help="Override output file path")
-def record(duration, output):
+@click.option("--meter", is_flag=True, default=False,
+              help="Stream live audio levels as JSON to stdout (used by the menu bar meter)")
+def record(duration, output, meter):
     """Record audio from microphone. Press Ctrl+C to stop."""
+    import json as _json
     from .recorder import Recorder
 
-    rec = Recorder(output_path=output)
+    on_level = None
+    if meter:
+        def on_level(bands):
+            # One compact JSON object per line on stdout; the menu bar parses these
+            # to drive the equalizer. Swallow pipe errors if the reader goes away.
+            try:
+                sys.stdout.write(_json.dumps({"lvl": [round(b, 3) for b in bands]}) + "\n")
+                sys.stdout.flush()
+            except (BrokenPipeError, ValueError, OSError):
+                pass
+
+    rec = Recorder(output_path=output, on_level=on_level)
     rec.start()
     click.echo(click.style("Recording... ", fg="red", bold=True) + "Press Ctrl+C to stop.")
 
@@ -222,12 +276,17 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
     import json as _json
     import sys as _sys
 
-    def stage(name, detail=""):
-        print(_json.dumps({"stage": name, "detail": detail}), file=_sys.stderr, flush=True)
+    def stage(name, detail="", **extra):
+        print(_json.dumps({"stage": name, "detail": detail, **extra}), file=_sys.stderr, flush=True)
 
     from .transcriber import Transcriber
     from .processor import Processor
     from .output import write_note, format_slack_message
+
+    # Accept non-WAV imports (m4a from the phone, etc.) by transcoding first.
+    if not audio_path.lower().endswith(".wav"):
+        stage("importing", "Converting audio")
+        audio_path = _ensure_wav(audio_path)
 
     import soundfile as sf
     info = sf.info(audio_path)
@@ -266,7 +325,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
         _compress_audio(audio_path)
         _prune_old_audio()
 
-    stage("done")
+    stage("done", note=os.path.basename(note_path))
     title = processed.get('title', 'N/A')
     summary = processed.get('summary', 'N/A')
     click.echo(click.style(f"\nTitle: {title}", fg="cyan", bold=True), err=True)
@@ -482,9 +541,9 @@ def process_latest(engine, diarize):
     from .processor import Processor
     from .output import write_note
 
-    def stage(name, detail=""):
+    def stage(name, detail="", **extra):
         """Emit a stage marker to stderr for the menu bar app to read."""
-        click.echo(_json.dumps({"stage": name, "detail": detail, "t": time.time()}), err=True)
+        click.echo(_json.dumps({"stage": name, "detail": detail, "t": time.time(), **extra}), err=True)
 
     recordings_dir = CONFIG["recording"]["recordings_dir"]
     if not os.path.exists(recordings_dir):
@@ -545,7 +604,47 @@ def process_latest(engine, diarize):
     action_count = len(processed.get("action_items", []))
     total = time.time() - t0
 
-    stage("done", f"Total: {total:.1f}s")
+    stage("done", f"Total: {total:.1f}s", note=os.path.basename(note_path))
+    print(title)
+
+
+@cli.command("correct")
+@click.option("--file", "-f", "note_file", default=None,
+              help="Note filename to correct (default: the most recent note)")
+@click.option("--message", "-m", required=True,
+              help="Plain-English correction, e.g. \"I'm the host, not Dwight\"")
+def correct(note_file, message):
+    """Apply a natural-language correction to a note and regenerate it.
+
+    Re-reads the note's original transcript with your correction as the source of
+    truth, so the fix (e.g. a reversed speaker attribution) propagates throughout
+    the note. Checked-off action items are preserved. Used by the menu bar app.
+    """
+    import json as _json
+    import sys as _sys
+    from .corrections import correct_note, latest_note
+
+    def stage(name, detail="", **extra):
+        print(_json.dumps({"stage": name, "detail": detail, **extra}), file=_sys.stderr, flush=True)
+
+    target = note_file or latest_note()
+    if not target:
+        click.echo("No note found to correct.", err=True)
+        raise SystemExit(1)
+
+    stage("correcting", "Re-reading transcript with your correction")
+    res = correct_note(target, message)
+    if not res.get("ok"):
+        click.echo(res.get("error", "Correction failed."), err=True)
+        raise SystemExit(1)
+
+    stage("done", note=target)
+    title = res.get("title", "Untitled")
+    restored = res.get("checkmarks_restored", 0)
+    if restored:
+        click.echo(f"Restored {restored} checked-off item(s).", err=True)
+    click.echo(click.style(f"Corrected: {title}", fg="green"), err=True)
+    # stdout reserved for the title (menu bar app reads it).
     print(title)
 
 

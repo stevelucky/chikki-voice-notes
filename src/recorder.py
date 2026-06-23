@@ -12,10 +12,42 @@ import threading
 import time
 from datetime import datetime
 
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
 from .config import CONFIG
+
+# Live-meter parameters. Bands are log-spaced across the voice-relevant range;
+# magnitudes are mapped from dB so true silence (a dead/muted mic) reads ~0 while
+# normal speech lights up the middle bands.
+_METER_BANDS = 5
+_METER_INTERVAL = 0.066          # ~15 Hz emit rate
+_METER_DB_FLOOR = -60.0          # dB at/below which a band reads 0 (silence)
+_METER_DB_CEIL = -12.0           # dB at/above which a band reads 1 (loud)
+_METER_MAX_SAMPLES = 2048        # cap FFT size for a cheap, bounded callback
+
+
+def _compute_bands(mono: "np.ndarray", sample_rate: int) -> "list[float]":
+    """Return _METER_BANDS normalized levels (0–1) from a mono audio block."""
+    n = mono.shape[0]
+    if n == 0:
+        return [0.0] * _METER_BANDS
+    if n > _METER_MAX_SAMPLES:
+        mono = mono[-_METER_MAX_SAMPLES:]
+        n = _METER_MAX_SAMPLES
+    spec = np.abs(np.fft.rfft(mono * np.hanning(n)))
+    freqs = np.fft.rfftfreq(n, 1.0 / sample_rate)
+    nyquist = sample_rate / 2.0
+    edges = np.logspace(np.log10(80.0), np.log10(min(8000.0, nyquist)), _METER_BANDS + 1)
+    out = []
+    for i in range(_METER_BANDS):
+        mask = (freqs >= edges[i]) & (freqs < edges[i + 1])
+        amp = (spec[mask].mean() / (n / 2.0)) if mask.any() else 0.0
+        db = 20.0 * np.log10(amp + 1e-9)
+        level = (db - _METER_DB_FLOOR) / (_METER_DB_CEIL - _METER_DB_FLOOR)
+        out.append(float(min(1.0, max(0.0, level))))
+    return out
 
 
 def _default_input_name() -> str | None:
@@ -41,13 +73,16 @@ def _open_stream(sample_rate, channels, callback):
 
 
 class Recorder:
-    def __init__(self, output_path: str = None):
+    def __init__(self, output_path: str = None, on_level=None):
         self._cfg = CONFIG["recording"]
         self._sample_rate = self._cfg["sample_rate"]
         self._channels = self._cfg["channels"]
         self._max_duration = self._cfg["max_duration_minutes"] * 60
         self._recordings_dir = self._cfg["recordings_dir"]
         self._output_path = output_path
+        # Optional live-meter callback: receives a list of band levels (0–1).
+        self._on_level = on_level
+        self._last_meter = 0.0
         os.makedirs(self._recordings_dir, exist_ok=True)
 
         self._stream = None
@@ -83,6 +118,18 @@ class Recorder:
             print(f"[recorder] {status}", file=sys.stderr)
         if self._write_queue is not None:
             self._write_queue.put(indata.copy())
+        # Live meter: compute band levels at a throttled rate. Cheap FFT on a
+        # small block; failures here must never disturb recording.
+        if self._on_level is not None:
+            now = time.time()
+            if now - self._last_meter >= _METER_INTERVAL:
+                self._last_meter = now
+                try:
+                    mono = indata[:, 0] if indata.shape[1] == 1 else indata.mean(axis=1)
+                    self._on_level(_compute_bands(np.asarray(mono, dtype=np.float64),
+                                                  self._sample_rate))
+                except Exception:
+                    pass
 
     def _writer_loop(self):
         while True:

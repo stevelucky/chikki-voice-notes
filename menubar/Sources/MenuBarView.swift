@@ -76,6 +76,20 @@ struct MenuBarView: View {
                 .frame(minWidth: 260)
                 .allowsHitTesting(false)
 
+            } else if recorder.isCorrecting {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Applying your correction…")
+                        .fontWeight(.semibold)
+                    Text("Re-reading the transcript and regenerating the note.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(minWidth: 260, alignment: .leading)
+                .allowsHitTesting(false)
+
             } else {
                 Button("Start Recording") {
                     Task { await recorder.startRecording() }
@@ -86,6 +100,12 @@ struct MenuBarView: View {
                     recorder.pickAndProcessAudioFile()
                 }
                 .globalKeyboardShortcut(.quickProcess)
+
+                if recorder.lastNoteFile != nil {
+                    Button("Fix Last Note…") {
+                        CorrectionWindowController.shared.show()
+                    }
+                }
             }
 
             Divider()

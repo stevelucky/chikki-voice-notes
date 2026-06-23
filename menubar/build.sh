@@ -63,7 +63,7 @@ codesign --force --sign - build/Scribe.app
 echo ""
 echo "Built: $(pwd)/build/Scribe.app"
 
-if [ "${1}" = "--install" ]; then
+if [ "${1:-}" = "--install" ]; then
     pkill -x Scribe 2>/dev/null || true
     pkill -f "src.cli record" 2>/dev/null || true
     sleep 0.3

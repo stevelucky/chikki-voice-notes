@@ -66,6 +66,11 @@ python -m src.cli reprocess transcripts/20260323_meeting.json --type strategy
 # Process the most recent recording (used by the menu bar app)
 python -m src.cli process-latest
 
+# Fix a note in plain English (e.g. a reversed speaker name) — re-reads the
+# original transcript with your correction as the source of truth and
+# regenerates the note. Defaults to the most recent note; checkmarks are kept.
+python -m src.cli correct -m "I'm the host, not Dwight — Dwight is the client"
+
 # List all notes
 python -m src.cli list-notes
 ```
@@ -91,7 +96,7 @@ cd menubar && ./build.sh
 open menubar/build/Scribe.app
 ```
 
-Click the mic icon to start/stop recording. Shows live progress stages during processing. Configure the global hotkey in the Settings panel.
+Click the mic icon to start/stop recording. While recording, the menu-bar icon shows a live **equalizer** of the incoming audio — flat bars (and an amber tint) mean the mic isn't picking anything up, so you can catch a dead/muted input before the meeting's over. Processing shows live progress stages, and once a note is saved a **Fix Last Note…** item lets you correct it in plain English. Configure the global hotkey in the Settings panel.
 
 ---
 

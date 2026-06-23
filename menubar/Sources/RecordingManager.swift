@@ -69,14 +69,25 @@ class RecordingManager: ObservableObject {
     @Published var projectDir: String
     @Published var llmProvider: String = "LLM"
     @Published var lastError: String?
+    @Published var lastNoteFile: String?       // basename of the most recent note (for corrections)
+    @Published var isCorrecting = false
 
     // Per-second timer state lives OFF the @Published graph the dropdown observes.
     let statusIcon = StatusIconModel(image: ScribeApp.idleMicIcon)
     private var elapsedSeconds: Int = 0
 
+    // Live-meter state, kept OFF the dropdown's @Published graph (same split as
+    // elapsedSeconds/statusIcon) so ~12 Hz updates only re-render the menu-bar
+    // icon, never the dropdown (which would scramble hover highlighting).
+    private var currentBands: [Float] = Array(repeating: 0, count: 5)
+    private var lastMeterRender = Date.distantPast
+    private var silentSince: Date?
+    private static let silenceWarnAfter: TimeInterval = 3.0
+
     private var recordProcess: Process?
     private let dashboardPort = 8765
     private var timer: Timer?
+    private var watchTimer: Timer?
     private var sleepAssertion: NSObjectProtocol?
     private let pipelineProcessBox = ProcessBox()
     // Snapshot of recordings/*.wav at the moment recording started, so cancel
@@ -164,17 +175,22 @@ class RecordingManager: ObservableObject {
 
     func startRecording() async {
         guard !isRecording else { return }
-        guard !isProcessing else {
-            sendNotification(title: "Scribe", body: "Still processing the last recording — try again in a moment.")
+        guard !isProcessing, !isCorrecting else {
+            sendNotification(title: "Scribe", body: "Still working on the last recording — try again in a moment.")
             return
         }
 
         // Snapshot existing recordings so a later cancel deletes only what we create.
         recordingsAtStart = currentRecordingFilenames()
 
+        // Reset meter state before the icon's first paint this session.
+        currentBands = Array(repeating: 0, count: 5)
+        silentSince = nil
+        lastMeterRender = .distantPast
+
         // Launch the recorder FIRST; only enter the recording state if it starts,
         // so a misconfigured env can't leave the app stuck in a phantom recording.
-        guard let proc = runCLI(args: ["record", "--duration", "0"], background: true) else {
+        guard let proc = launchRecorder() else {
             recordingsAtStart = []
             lastError = "Failed to launch the recorder. Check the project folder and conda env in Settings."
             sendNotification(title: "Scribe", body: "Couldn't start recording — check Settings (project folder / conda env).")
@@ -186,11 +202,13 @@ class RecordingManager: ObservableObject {
         elapsedSeconds = 0
 
         // Per-second updates go to statusIcon only (not the dropdown's @Published graph).
-        statusIcon.image = Self.makeRecordingPillIcon(time: formattedTime)
+        // The live meter (driven by the recorder's stdout) repaints the same icon
+        // between ticks; this 1 Hz timer keeps the clock advancing during silence.
+        renderRecordingIcon()
         timer = Self.makeCommonModeTimer(interval: 1) { [weak self] in
             guard let self else { return }
             self.elapsedSeconds += 1
-            self.statusIcon.image = Self.makeRecordingPillIcon(time: self.formattedTime)
+            self.renderRecordingIcon()
         }
 
         sleepAssertion = ProcessInfo.processInfo.beginActivity(
@@ -199,6 +217,87 @@ class RecordingManager: ObservableObject {
         )
 
         sendNotification(title: "Scribe", body: "Recording started. Press Cmd+Shift+R to stop.")
+    }
+
+    // MARK: - Live meter
+
+    /// Launch `src.cli record --meter`, streaming the recorder's stdout (one
+    /// `{"lvl":[…]}` JSON object per line) to drive the menu-bar equalizer. Uses
+    /// `exec` (via shellCommand) so interrupt()/terminate() reach Python directly.
+    private func launchRecorder() -> Process? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", shellCommand(args: ["record", "--duration", "0", "--meter"])]
+        process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin"]
+        env["PATH"] = extraPaths.joined(separator: ":") + ":" + (env["PATH"] ?? "/usr/bin:/bin")
+        if let dotenvVars = loadDotEnv() { env.merge(dotenvVars) { _, new in new } }
+        process.environment = env
+
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        // Discard the recorder's stderr so it can't fill a pipe buffer and stall
+        // the child over a long meeting (we don't surface recorder logs here).
+        process.standardError = FileHandle.nullDevice
+
+        let meterAcc = LineAccumulator()
+        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil; return }  // EOF: self-cleaning
+            guard let chunk = String(data: data, encoding: .utf8) else { return }
+            for line in meterAcc.feed(chunk) { self?.handleMeterLine(line) }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            lastError = "Failed to launch: \(error.localizedDescription)"
+            return nil
+        }
+        return process
+    }
+
+    /// Parse one `{"lvl":[…]}` line off the recorder's stdout (background thread),
+    /// then hand the band levels to the main actor.
+    nonisolated private func handleMeterLine(_ line: String) {
+        guard line.hasPrefix("{"),
+              let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = obj["lvl"] as? [Any] else { return }
+        let bands = arr.compactMap { ($0 as? NSNumber)?.floatValue }
+        guard !bands.isEmpty else { return }
+        Task { @MainActor [weak self] in self?.updateMeter(bands) }
+    }
+
+    /// Apply new band levels: track silence and repaint the icon (throttled).
+    private func updateMeter(_ bands: [Float]) {
+        guard isRecording else { return }
+        currentBands = bands
+        let active = bands.contains { $0 > 0.03 }
+        if active {
+            silentSince = nil
+        } else if silentSince == nil {
+            silentSince = Date()
+        }
+        let now = Date()
+        if now.timeIntervalSince(lastMeterRender) >= 0.08 {  // ~12 Hz
+            lastMeterRender = now
+            renderRecordingIcon()
+        }
+    }
+
+    /// True once the input has been quiet long enough to flag a likely dead/muted
+    /// mic (drives the icon's warning tint — visual only, no notifications).
+    private func isSilent() -> Bool {
+        guard let since = silentSince else { return false }
+        return Date().timeIntervalSince(since) >= Self.silenceWarnAfter
+    }
+
+    private func renderRecordingIcon() {
+        statusIcon.image = Self.makeRecordingPillIcon(
+            time: formattedTime, bands: currentBands, warning: isSilent())
     }
 
     /// Filenames of *.wav currently in the recordings folder.
@@ -321,23 +420,138 @@ class RecordingManager: ObservableObject {
         }
     }
 
-    func processAudioFile(at path: String) async {
+    @discardableResult
+    func processAudioFile(at path: String) async -> Bool {
         let capturedProjectDir = projectDir
         let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
         let python = Self.pythonPath()
         let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
         let escapedPath = path.replacingOccurrences(of: "\"", with: "\\\"")
         let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process \"\(escapedPath)\" \(diarizeFlag)"
-        await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
+        return await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
     }
 
-    private func runPipeline(cmd: String, projectDir: String) async {
+    // MARK: - Corrections
+
+    /// Apply a plain-English correction to a note and regenerate it via
+    /// `src.cli correct`. Reuses the streaming subprocess runner; shows a distinct
+    /// "correcting" state (not the 3-step processing UI).
+    func applyCorrection(file: String, message: String) async {
+        guard !isRecording, !isProcessing, !isCorrecting else {
+            sendNotification(title: "Scribe", body: "Busy — try again in a moment.")
+            return
+        }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        isCorrecting = true
+        lastError = nil
+        statusIcon.image = ScribeApp.processingPillIcon
+
+        let capturedProjectDir = projectDir
+        let python = Self.pythonPath()
+        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli correct "
+                + "-f \"\(Self.shellEscape(file))\" -m \"\(Self.shellEscape(message))\""
+
+        let (output, exitCode, stderrLog) = await Task.detached { [self] in
+            self.runSubprocessWithProgress(cmd: cmd, projectDir: capturedProjectDir)
+        }.value
+
+        isCorrecting = false
+        statusIcon.image = ScribeApp.idleMicIcon
+
+        if exitCode == 0, let output, !output.isEmpty {
+            lastError = nil
+            lastNote = output
+            sendNotification(title: "Scribe: Note Corrected", body: output)
+        } else {
+            let errorLine = stderrLog
+                .components(separatedBy: .newlines)
+                .filter { !$0.hasPrefix("{") && !$0.isEmpty }
+                .last ?? "Unknown error (exit \(exitCode))"
+            lastError = errorLine
+            sendNotification(title: "Scribe: Correction Failed", body: errorLine)
+        }
+    }
+
+    /// Escape a string for inclusion inside a zsh double-quoted argument.
+    nonisolated static func shellEscape(_ s: String) -> String {
+        var r = s.replacingOccurrences(of: "\\", with: "\\\\")
+        r = r.replacingOccurrences(of: "\"", with: "\\\"")
+        r = r.replacingOccurrences(of: "$", with: "\\$")
+        r = r.replacingOccurrences(of: "`", with: "\\`")
+        return r
+    }
+
+    // MARK: - Watch folder (phone imports via a shared/iCloud folder)
+
+    static let watchEnabledKey = "watchFolderEnabled"
+    static let watchPathKey = "watchFolderPath"
+    private static let importAudioExts: Set<String> = ["m4a", "mp3", "wav", "aac", "caf", "mp4", "m4v"]
+
+    /// Begin polling the configured import folder for new phone recordings.
+    func startWatchFolder() {
+        watchTimer?.invalidate()
+        watchTimer = Self.makeCommonModeTimer(interval: 20) {
+            Task { await RecordingManager.shared.scanWatchFolder() }
+        }
+        Task { await scanWatchFolder() }  // also scan immediately
+    }
+
+    /// Scan the import folder; import one ready file per pass. iCloud placeholders
+    /// are triggered to download and picked up on a later pass.
+    func scanWatchFolder() async {
+        guard UserDefaults.standard.bool(forKey: Self.watchEnabledKey),
+              let folder = UserDefaults.standard.string(forKey: Self.watchPathKey), !folder.isEmpty,
+              !isRecording, !isProcessing else { return }
+
+        let fm = FileManager.default
+        let dir = URL(fileURLWithPath: folder)
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys,
+                                                      options: [.skipsHiddenFiles]) else { return }
+
+        for url in items.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard Self.importAudioExts.contains(url.pathExtension.lowercased()) else { continue }
+            let rv = try? url.resourceValues(forKeys: Set(keys))
+            if rv?.isDirectory == true { continue }
+            // iCloud: trigger download if the file isn't local yet, then wait for a later pass.
+            if rv?.isUbiquitousItem == true, rv?.ubiquitousItemDownloadingStatus != .current {
+                try? fm.startDownloadingUbiquitousItem(at: url)
+                continue
+            }
+            sendNotification(title: "Scribe", body: "Importing “\(url.lastPathComponent)” from your phone…")
+            let ok = await processAudioFile(at: url.path)
+            handleImported(url, success: ok, in: dir)
+            return  // one per pass; the timer picks up the rest
+        }
+    }
+
+    private func handleImported(_ url: URL, success: Bool, in dir: URL) {
+        if success {
+            // The audio is now preserved in recordings/ (governed by "Keep Audio
+            // Files") plus the note/transcript, and the original Voice Memo is still
+            // on the phone — so the shared copy is redundant. Remove it to avoid
+            // bloating the iCloud folder.
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            // Keep failures aside so they're visible and can be retried.
+            let sub = dir.appendingPathComponent("_failed")
+            try? FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            let dest = sub.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.moveItem(at: url, to: dest)
+        }
+    }
+
+    @discardableResult
+    private func runPipeline(cmd: String, projectDir: String) async -> Bool {
         // Reentrancy guard: a single processing pipeline at a time. Without this,
         // a second record/stop cycle could run two pipelines concurrently and
         // leak/clobber the shared timer and state.
         guard !isProcessing else {
             sendNotification(title: "Scribe", body: "Already processing — please wait for the current note to finish.")
-            return
+            return false
         }
 
         isProcessing = true
@@ -359,6 +573,7 @@ class RecordingManager: ObservableObject {
             lastError = nil
             lastNote = output
             sendNotification(title: "Scribe: Note Saved", body: output)
+            return true
         } else {
             let errorLine = stderrLog
                 .components(separatedBy: .newlines)
@@ -366,6 +581,7 @@ class RecordingManager: ObservableObject {
                 .last ?? "Unknown error (exit \(exitCode))"
             lastError = errorLine
             sendNotification(title: "Scribe: Processing Failed", body: errorLine)
+            return false
         }
     }
 
@@ -433,8 +649,12 @@ class RecordingManager: ObservableObject {
               let stage = obj["stage"] as? String else { return }
 
         let detail = obj["detail"] as? String ?? ""
+        let note = obj["note"] as? String
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // The "done" marker carries the saved note's filename so we can offer
+            // a correction on exactly this note (not just "the latest").
+            if let note, !note.isEmpty { self.lastNoteFile = note }
             let stageOrder = ["transcribing", "diarizing", "processing", "saving", "done"]
             if let idx = stageOrder.firstIndex(of: stage), idx > 0 {
                 for i in 0..<idx { self.completedStages.insert(stageOrder[i]) }
@@ -662,22 +882,43 @@ class RecordingManager: ObservableObject {
         p.waitUntilExit()
     }
 
-    static func makeRecordingPillIcon(time: String) -> NSImage {
+    static func makeRecordingPillIcon(time: String, bands: [Float] = [], warning: Bool = false) -> NSImage {
+        // Amber when the input has gone quiet (likely dead/muted mic), else red.
+        let fill = warning ? Color(red: 0.92, green: 0.58, blue: 0.0) : Color.red
         let view = ZStack {
-            Capsule().fill(Color.red)
-            HStack(spacing: 3) {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 10, weight: .semibold))
+            Capsule().fill(fill)
+            HStack(spacing: 4) {
+                EqualizerBars(bands: bands)
+                    .frame(width: 16, height: 12)
                 Text(time)
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundColor(.white)
             }
-            .foregroundColor(.white)
         }
-        .frame(width: 62, height: 20)
+        .frame(width: 74, height: 20)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2.0
         let img = renderer.nsImage ?? NSImage()
         img.isTemplate = false
         return img
+    }
+}
+
+/// A compact 5-bar equalizer that grows from the center, driven by the recorder's
+/// live band levels (0–1). Flat bars = no audio reaching the mic.
+struct EqualizerBars: View {
+    let bands: [Float]
+    private let count = 5
+    private let maxHeight: CGFloat = 12
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 1.5) {
+            ForEach(0..<count, id: \.self) { i in
+                let level = i < bands.count ? CGFloat(max(0, min(1, bands[i]))) : 0
+                Capsule()
+                    .fill(Color.white)
+                    .frame(width: 2, height: max(2, level * maxHeight))
+            }
+        }
     }
 }

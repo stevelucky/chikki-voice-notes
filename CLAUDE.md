@@ -39,7 +39,9 @@ conda activate scribe
 python -m src.cli <command>
 ```
 
-Commands: `quick`, `record`, `transcribe`, `process`, `reprocess`, `process-latest`, `engines`, `types`, `menubar`, `list-notes`
+Commands: `quick`, `record`, `transcribe`, `process`, `reprocess`, `process-latest`, `correct`, `engines`, `types`, `menubar`, `list-notes`
+
+`correct` regenerates a note from its original transcript with a plain-English correction as authoritative context (e.g. fixing a reversed speaker attribution); checked-off action items are preserved. `record --meter` streams live audio-band levels as JSON on stdout for the menu bar's equalizer.
 
 Key flags: `--engine/-e` (transcription engine), `--type/-t` (meeting type), `--context/-c` (additional LLM context)
 
