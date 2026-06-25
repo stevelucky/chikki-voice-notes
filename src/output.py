@@ -117,6 +117,10 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     # Render all sections from the processed output dynamically
     _SKIP_KEYS = {"title", "summary", "topics"}
 
+    # Idea-session notes flag their (rare) action items for review rather than
+    # dropping them straight into the Action Center — see the someday review queue.
+    is_idea_note = processed.get("_meeting_type") == "idea"
+
     for key, value in processed.items():
         # Skip rendered-elsewhere keys and any internal metadata (keys starting
         # with "_", e.g. _meeting_type, _chunked, _section_count).
@@ -126,16 +130,40 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
         heading = key.replace("_", " ").title()
 
         if key == "action_items" and isinstance(value, list):
-            lines.append("## Action Items")
+            # In an idea session, a to-do is the exception, not the default — tag
+            # it pending-review so it lands in the Someday review queue instead of
+            # the Action Center. The inline comment rides on the item's own line
+            # (parsed by notes_index) and never shifts other line numbers.
+            if is_idea_note:
+                lines.append("## Possible To-Dos (needs review)")
+                review_tag = " <!-- someday: review todo -->"
+            else:
+                lines.append("## Action Items")
+                review_tag = ""
             for item in value:
                 if isinstance(item, dict):
                     owner = item.get("owner") or "unassigned"
                     task = item.get("task", "")
                     deadline = item.get("deadline")
                     deadline_str = f" (by {deadline})" if deadline else ""
-                    lines.append(f"- [ ] **{owner}**: {task}{deadline_str}")
+                    lines.append(f"- [ ] **{owner}**: {task}{deadline_str}{review_tag}")
+                elif is_idea_note:
+                    lines.append(f"- [ ] {item}{review_tag}")
                 else:
                     lines.append(f"- {item}")
+            lines.append("")
+
+        elif key == "someday_ideas" and isinstance(value, list):
+            # Long-term ideas surfaced from a meeting: flagged for review, not live
+            # to-dos. Rendered as checkboxes so notes_index can triage them, but
+            # tagged so they stay out of the Action Center buckets and counts.
+            lines.append("## Someday / Ideas")
+            for idea in value:
+                if isinstance(idea, dict):
+                    text = idea.get("idea") or idea.get("task") or json.dumps(idea)
+                else:
+                    text = idea
+                lines.append(f"- [ ] {text} <!-- someday: review idea -->")
             lines.append("")
 
         elif key == "updates" and isinstance(value, list):

@@ -1,6 +1,6 @@
 <li class="item-row flex items-start gap-3 px-4 py-3 hover:bg-paper/60 transition-colors
-           {% if item and item.done %}opacity-50{% endif %}"
-    {% if item %}data-bucket="{{ item.bucket }}"{% endif %}>
+           {% if item and item.done and bucket == 'done' %}opacity-50{% endif %}"
+    {% if item %}data-bucket="{{ item.bucket }}" data-key="{{ item.note_filename }}|{{ item.line_no }}"{% endif %}>
   {% if item %}
   <input type="checkbox" autocomplete="off" {% if item.done %}checked{% endif %}
          class="mt-0.5 h-4 w-4 rounded border-line text-accent cursor-pointer
@@ -16,6 +16,17 @@
 
   <div class="flex-1 min-w-0">
     <span class="text-sm leading-snug {% if item.done %}line-through text-ink-faint{% else %}text-ink{% endif %}">{{ item.text }}</span>
+    {% if item.done and bucket != 'done' %}
+    <div class="mt-1 inline-flex items-center gap-1 text-[11px] text-accent">
+      <svg class="spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+      Moving to Done — uncheck to keep
+    </div>
+    {% elif not item.done and bucket == 'done' %}
+    <div class="mt-1 inline-flex items-center gap-1 text-[11px] text-accent">
+      <svg class="spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+      Moving back to to-dos — re-check to keep done
+    </div>
+    {% endif %}
     {% set show_owner = item.owner and item.bucket == 'waiting' %}
     {% if show_owner or item.deadline %}
     <div class="mt-1.5 flex flex-wrap gap-2 text-xs">

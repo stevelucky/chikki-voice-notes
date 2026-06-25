@@ -1,0 +1,27 @@
+{# Title row + meta. Lives inside the stable #note-header wrapper and is swapped
+   via innerHTML after a rename. Edit-in-place: the title turns into an input
+   where it sits (toggled client-side), and Save posts via htmx. #}
+<div class="flex items-center gap-2">
+  <h1 data-title-display class="flex-1 min-w-0 font-display text-3xl sm:text-4xl font-semibold tracking-tight text-ink leading-tight">{{ title }}</h1>
+  <button type="button" data-title-editbtn onclick="scribeStartRename(this)"
+          class="shrink-0 inline-flex items-center gap-1 text-xs text-ink-faint hover:text-accent transition-colors"
+          title="Rename this note">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+    </svg>
+    Rename
+  </button>
+  <form data-title-form style="display:none" class="flex-1 flex items-center gap-2"
+        hx-post="/note/title" hx-target="#note-header" hx-swap="innerHTML">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <input type="text" name="title" value="{{ title }}" required autocomplete="off" data-title-input
+           class="flex-1 min-w-0 rounded-lg border border-line px-3 py-1.5 font-display text-2xl font-semibold bg-paper/40 text-ink
+                  focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent/40">
+    <button type="submit" class="btn-primary shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold">Save</button>
+    <button type="button" onclick="scribeCancelRename(this)"
+            class="shrink-0 text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+  </form>
+</div>
+<p class="mt-2 font-mono text-xs text-ink-faint">
+  {{ meta.date }}{% if meta.time %} · {{ meta.time }}{% endif %}{% if meta.type and meta.type != 'default' %} · {{ meta.type }}{% endif %}{% if meta.duration %} · {{ meta.duration }}{% endif %}
+</p>

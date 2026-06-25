@@ -371,3 +371,38 @@ class Processor:
         final["_section_count"] = total
         return final
 
+
+_CLASSIFY_SYSTEM = """You route a voice transcript to the right note template. Decide which ONE it is:
+
+- "idea": one person thinking out loud about a longer-term idea, product, or project they might pursue SOMEDAY but are not actively working on right now — exploring a concept, riffing on "what if we built X", capturing a someday/maybe ambition.
+- "meeting": everything else — a meeting, call, standup, 1:1, interview, or a voice note about current or ongoing work, tasks, and decisions.
+
+Most recordings are "meeting". Choose "idea" ONLY when the whole recording is clearly one person exploring a future idea, not doing or discussing present work.
+
+Reply with ONLY this JSON: {"type": "idea"} or {"type": "meeting"}."""
+
+
+def classify_recording(transcript_text: str, max_chars: int = 4000) -> str:
+    """Best-effort binary classification of a transcript: 'idea' or 'meeting'.
+
+    Used by the auto-type path (imported audio files / phone recordings, which
+    carry no explicit capture mode). Sends only the opening of the transcript to
+    bound tokens, and falls back to 'meeting' on any error so a classifier hiccup
+    never blocks processing.
+    """
+    text = (transcript_text or "").strip()
+    if not text:
+        return "meeting"
+    cfg = CONFIG["processing"]
+    try:
+        raw = _call_llm(cfg.get("provider", "gemini"), cfg["model"],
+                        _CLASSIFY_SYSTEM, text[:max_chars], 0.0)
+        data = Processor._parse_json_response(raw)
+        if isinstance(data, dict) and str(data.get("type", "")).strip().lower() == "idea":
+            print("[classify] Detected: idea", file=sys.stderr)
+            return "idea"
+    except Exception as e:
+        print(f"[classify] failed ({e}); defaulting to meeting.", file=sys.stderr)
+    print("[classify] Detected: meeting", file=sys.stderr)
+    return "meeting"
+

@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 import markdown as _md
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -72,7 +72,7 @@ def _group_items(bucket: str = "mine", query: str = "", limit: "int | None" = No
             folded_by_gid.setdefault(it.merge_id, []).append(it)
 
     if bucket == "done":
-        items = [it for it in all_items if it.done and it.bucket != "merged"]
+        items = [it for it in all_items if it.done and it.bucket not in ("merged", "someday")]
     else:
         items = [it for it in all_items if not it.done and it.bucket == bucket]
     for it in items:
@@ -284,7 +284,8 @@ def merge_candidates(request: Request, filename: str, line_no: int,
     """The picker body: other open, non-folded to-dos that can fold into this one."""
     cands = [
         it for it in ni.action_items(include_done=False)
-        if it.bucket != "merged" and not (it.note_filename == filename and it.line_no == line_no)
+        if it.bucket not in ("merged", "someday")
+        and not (it.note_filename == filename and it.line_no == line_no)
     ]
     return templates.TemplateResponse(request, "_merge_candidates.html", {
         "candidates": cands, "primary_filename": filename, "primary_line_no": line_no,
@@ -428,6 +429,10 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
             except OSError:
                 diff = None
 
+    # Breadcrumb: idea notes belong to Someday; everything else to All Notes.
+    is_idea = str(meta.get("type", "")).lower() == "idea"
+    back_href, back_label = ("/someday", "Someday") if is_idea else ("/notes", "All notes")
+
     return templates.TemplateResponse(request, "note.html", {
         "nav": "",
         "filename": filename,
@@ -438,6 +443,8 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
         "has_backup": corr.has_backup(filename),
         "result": result,
         "diff": diff,
+        "back_href": back_href,
+        "back_label": back_label,
     })
 
 
@@ -457,3 +464,75 @@ def note_undo(request: Request, filename: str = Form(...)):
     ok = corr.undo(filename)
     res = {"ok": ok, "undo": True} if ok else {"ok": False, "error": "Nothing to undo."}
     return _render_note(request, filename, result=res)
+
+
+@app.post("/note/delete")
+def note_delete(filename: str = Form(...)):
+    """Soft-delete a note (move to notes/.trash) and return to its home list."""
+    path = corr.resolve_note(filename)
+    target = "/notes"
+    if path:
+        meta, _ = ni._parse_frontmatter(open(path, encoding="utf-8").read())
+        if str(meta.get("type", "")).lower() == "idea":
+            target = "/someday"
+    ni.delete_note(filename)
+    return RedirectResponse(target, status_code=303)
+
+
+@app.post("/note/title", response_class=HTMLResponse)
+def note_title(request: Request, filename: str = Form(...), title: str = Form(...)):
+    """Rename a note's displayed title (frontmatter + H1) and re-render the header."""
+    ni.set_note_title(filename, title)
+    path = corr.resolve_note(filename)
+    meta = {}
+    if path:
+        meta, _ = ni._parse_frontmatter(open(path, encoding="utf-8").read())
+    return templates.TemplateResponse(request, "_note_header.html", {
+        "filename": filename, "title": meta.get("title", filename), "meta": meta,
+    })
+
+
+# ─── Someday: long-term ideas + the review queue ────────────────────────────
+
+def _someday_ctx() -> dict:
+    """Everything the Someday page (and its triage partial) needs: the review
+    queue, parked ideas from meetings, and dedicated idea-session notes."""
+    return {
+        "nav": "someday",
+        "review": ni.someday_items(state="review"),
+        "parked": ni.someday_items(state="parked"),
+        "ideas": ni.idea_notes(),
+        **_reassign_ctx(),
+    }
+
+
+def _render_someday_body(request: Request) -> HTMLResponse:
+    """Re-render just the page body after a triage action (htmx swap target)."""
+    return templates.TemplateResponse(request, "_someday.html", _someday_ctx())
+
+
+@app.get("/someday", response_class=HTMLResponse)
+def someday(request: Request):
+    return templates.TemplateResponse(request, "someday.html", _someday_ctx())
+
+
+@app.post("/someday/confirm-idea", response_class=HTMLResponse)
+def someday_confirm_idea(request: Request, filename: str = Form(...), line_no: int = Form(...)):
+    """Keep a flagged item as a parked Someday idea."""
+    ni.confirm_idea(filename, line_no)
+    return _render_someday_body(request)
+
+
+@app.post("/someday/confirm-todo", response_class=HTMLResponse)
+def someday_confirm_todo(request: Request, filename: str = Form(...), line_no: int = Form(...),
+                         owner: str = Form(""), deadline: str = Form("")):
+    """Promote a flagged item into a live Action Center to-do (with owner/deadline)."""
+    ni.confirm_todo(filename, line_no, owner=owner, deadline=deadline)
+    return _render_someday_body(request)
+
+
+@app.post("/someday/dismiss", response_class=HTMLResponse)
+def someday_dismiss(request: Request, filename: str = Form(...), line_no: int = Form(...)):
+    """Decline a flagged item — delete it from its note."""
+    ni.dismiss_item(filename, line_no)
+    return _render_someday_body(request)

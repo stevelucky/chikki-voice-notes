@@ -14,9 +14,6 @@
       </p>
       {% if bucket != 'done' %}
       <div class="flex items-center gap-3">
-        <span id="selected-count" class="text-sm font-medium text-accent" style="display:none">
-          <span data-selected>0</span> selected
-        </span>
         <button type="button" id="find-dupes"
                 class="inline-flex items-center gap-1 text-xs font-medium text-accent hover:opacity-80 disabled:opacity-50 transition-opacity"
                 hx-post="/action-items/find-duplicates" hx-include="#filter-form"
@@ -55,13 +52,6 @@
         </a>
         {% endfor %}
       </nav>
-      {% if bucket != 'done' %}
-      <button type="button" id="clear-completed" onclick="scribeClearCompleted()" disabled
-              class="btn-primary shrink-0 mb-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm"
-              title="Check off items first">
-        <span class="hidden sm:inline">Clear completed →</span><span class="sm:hidden">Clear ✓</span>
-      </button>
-      {% endif %}
     </div>
 
     <form id="filter-form" class="mt-3">

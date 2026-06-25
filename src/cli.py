@@ -32,6 +32,16 @@ def _resolve_length(length, segments=None):
 
 
 
+def _resolve_auto_type(meeting_type, transcript_text):
+    """Resolve the special '--type auto' into a concrete type by classifying the
+    transcript as an idea session or a general meeting. Any other value (including
+    None) passes through unchanged so explicit choices are always honored."""
+    if meeting_type != "auto":
+        return meeting_type
+    from .processor import classify_recording
+    return "idea" if classify_recording(transcript_text) == "idea" else "default"
+
+
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
@@ -269,7 +279,8 @@ def transcribe(audio_path, engine):
 @click.option("--engine", "-e", type=click.Choice(["whisper", "indicwhisper", "parakeet"]), default=None,
               help="Transcription engine (default: from config)")
 @click.option("--type", "-t", "meeting_type", default=None,
-              help="Meeting type: default, standup, strategy, one_on_one, brainstorm, interview")
+              help="Meeting type: default, idea, standup, strategy, one_on_one, brainstorm, interview. "
+                   "Use 'auto' to detect meeting vs idea from the audio.")
 @click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
 def process(audio_path, context, slack, engine, meeting_type, diarize):
     """Transcribe and process an audio file into structured notes."""
@@ -314,6 +325,12 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
             speaker_segments = d.diarize(audio_path)
             transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
 
+    if meeting_type == "auto":
+        stage("classifying", "Detecting meeting vs idea")
+        with live_timer("Detecting recording type"):
+            meeting_type = _resolve_auto_type(meeting_type, transcript["text"])
+        click.echo(f"  [auto-type → {meeting_type}]", err=True)
+
     p = Processor(meeting_type=meeting_type)
     stage("processing")
     with live_timer(f"Extracting notes ({p.type_name}) via {CONFIG['processing']['model']}"):
@@ -355,7 +372,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
 @click.option("--engine", "-e", type=click.Choice(["whisper", "indicwhisper", "parakeet"]), default=None,
               help="Transcription engine (default: from config)")
 @click.option("--type", "-t", "meeting_type", default=None,
-              help="Meeting type: default, standup, strategy, one_on_one, brainstorm, interview")
+              help="Meeting type: default, idea, standup, strategy, one_on_one, brainstorm, interview")
 @click.option("--length", type=click.Choice(["short","medium","long","open"]), default=None, help="Meeting length. Long enables 30-min chunked summarization.")
 @click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
 def quick(context, slack, duration, engine, meeting_type, length, diarize):
@@ -481,7 +498,7 @@ def types():
 @cli.command()
 @click.argument("transcript_path", type=click.Path(exists=True))
 @click.option("--type", "-t", "meeting_type", required=True,
-              help="Meeting type: default, standup, strategy, one_on_one, brainstorm, interview")
+              help="Meeting type: default, idea, standup, strategy, one_on_one, brainstorm, interview")
 @click.option("--context", "-c", default="", help="Additional context for the LLM")
 def reprocess(transcript_path, meeting_type, context):
     """Re-summarize a saved transcript with a different meeting type.
@@ -534,7 +551,9 @@ def menubar():
 @cli.command("process-latest")
 @click.option("--engine", "-e", type=click.Choice(["whisper", "indicwhisper", "parakeet"]), default=None)
 @click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
-def process_latest(engine, diarize):
+@click.option("--type", "-t", "meeting_type", default=None,
+              help="Meeting type (default: from config). Use 'idea' for an idea session.")
+def process_latest(engine, diarize, meeting_type):
     """Process the most recent recording. Used by the menu bar app."""
     import json as _json
     from .transcriber import Transcriber
@@ -588,9 +607,13 @@ def process_latest(engine, diarize):
         
     t1 = time.time()
 
+    if meeting_type == "auto":
+        stage("classifying", "Detecting meeting vs idea")
+        meeting_type = _resolve_auto_type(meeting_type, transcript["text"])
+
     stage("processing", f"Transcribed in {t1 - t0:.1f}s — sending to LLM")
 
-    p = Processor()
+    p = Processor(meeting_type=meeting_type)
     processed = p.process(transcript["text"])
     t2 = time.time()
 

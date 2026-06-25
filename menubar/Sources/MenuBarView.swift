@@ -14,7 +14,7 @@ struct MenuBarView: View {
                     // Live elapsed time is shown in the menu-bar icon itself; keeping
                     // it out of the dropdown means this menu never re-renders while
                     // open, so hover highlighting stays stable.
-                    Text("Recording")
+                    Text(recorder.captureMode == .idea ? "Recording idea" : "Recording")
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -91,10 +91,16 @@ struct MenuBarView: View {
                 .allowsHitTesting(false)
 
             } else {
-                Button("Start Recording") {
+                Button("Record Meeting") {
                     Task { await recorder.startRecording() }
                 }
                 .globalKeyboardShortcut(.toggleRecording)
+
+                // Capture a long-term idea: same recording flow, but processed
+                // idea-shaped (no to-do hunting). Surfaces under the Someday tab.
+                Button("Record Idea") {
+                    Task { await recorder.startRecording(mode: .idea) }
+                }
 
                 Button("Process Audio File...") {
                     recorder.pickAndProcessAudioFile()

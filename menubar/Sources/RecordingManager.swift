@@ -56,11 +56,21 @@ final class LineAccumulator: @unchecked Sendable {
     init(image: NSImage) { self.image = image }
 }
 
+/// What the current recording is for. A meeting is processed normally (to-dos →
+/// Action Center); an idea session is processed with `--type idea` so it's
+/// captured idea-shaped and its rare to-dos are flagged for review, not auto-filed.
+enum CaptureMode {
+    case meeting, idea
+}
+
 @MainActor
 class RecordingManager: ObservableObject {
     static let shared = RecordingManager()
 
     @Published var isRecording = false
+    // Only changes on start/stop (a real state change), so it's safe on the
+    // dropdown's @Published graph alongside isRecording.
+    @Published var captureMode: CaptureMode = .meeting
     @Published var lastNote: String?
     @Published var isProcessing = false
     @Published var processingStage: String = ""  // raw stage key from Python
@@ -173,12 +183,13 @@ class RecordingManager: ObservableObject {
         }
     }
 
-    func startRecording() async {
+    func startRecording(mode: CaptureMode = .meeting) async {
         guard !isRecording else { return }
         guard !isProcessing, !isCorrecting else {
             sendNotification(title: "Scribe", body: "Still working on the last recording — try again in a moment.")
             return
         }
+        captureMode = mode
 
         // Snapshot existing recordings so a later cancel deletes only what we create.
         recordingsAtStart = currentRecordingFilenames()
@@ -216,7 +227,8 @@ class RecordingManager: ObservableObject {
             reason: "Scribe is recording audio"
         )
 
-        sendNotification(title: "Scribe", body: "Recording started. Press Cmd+Shift+R to stop.")
+        let what = mode == .idea ? "Idea session" : "Recording"
+        sendNotification(title: "Scribe", body: "\(what) started. Press Cmd+Shift+R to stop.")
     }
 
     // MARK: - Live meter
@@ -393,7 +405,10 @@ class RecordingManager: ObservableObject {
         let capturedDiarize = UserDefaults.standard.bool(forKey: "diarizeEnabled")
         let python = Self.pythonPath()
         let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
-        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process-latest \(diarizeFlag)"
+        // An idea session is processed idea-shaped; reset to meeting for next time.
+        let typeFlag = captureMode == .idea ? " --type idea" : ""
+        captureMode = .meeting
+        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process-latest \(diarizeFlag)\(typeFlag)"
         await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
     }
 
@@ -427,7 +442,9 @@ class RecordingManager: ObservableObject {
         let python = Self.pythonPath()
         let diarizeFlag = capturedDiarize ? "--diarize" : "--no-diarize"
         let escapedPath = path.replacingOccurrences(of: "\"", with: "\\\"")
-        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process \"\(escapedPath)\" \(diarizeFlag)"
+        // Imported files carry no capture mode, so let the pipeline infer meeting
+        // vs idea from the audio's content (--type auto).
+        let cmd = "cd \"\(capturedProjectDir)\" && exec \"\(python)\" -m src.cli process \"\(escapedPath)\" \(diarizeFlag) --type auto"
         return await runPipeline(cmd: cmd, projectDir: capturedProjectDir)
     }
 
@@ -734,11 +751,16 @@ class RecordingManager: ObservableObject {
     /// app's lifecycle (App Nap, process-group signals) and prevents a SIGPIPE death
     /// from the inherited stderr — both of which were killing it, so a browser
     /// refresh would hit a dead port. Any stale instance on the port is replaced.
+    ///
+    /// Runs with `--reload` scoped to the code dirs (src/, web/) so edits to the
+    /// Python or templates are picked up live — without watching notes/ or
+    /// recordings/, where a new note or recording would otherwise restart the server.
     func openDashboard() {
         let python = Self.pythonPath()
         let log = NSTemporaryDirectory() + "scribe-dashboard.log"
         let cmd = "pkill -f 'uvicorn web.app:app --port \(dashboardPort)' 2>/dev/null; sleep 0.3; "
-                + "cd \"\(projectDir)\" && nohup \"\(python)\" -m uvicorn web.app:app --port \(dashboardPort) > \"\(log)\" 2>&1 &"
+                + "cd \"\(projectDir)\" && nohup \"\(python)\" -m uvicorn web.app:app --port \(dashboardPort) "
+                + "--reload --reload-dir src --reload-dir web > \"\(log)\" 2>&1 &"
         _ = runBackgroundShell(cmd)
         // Give uvicorn a moment to bind before opening the browser.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in

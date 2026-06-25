@@ -32,6 +32,7 @@ growing pile of notes into a live operating picture.
 
 - **Phase 1 — Action Center:** ✅ shipped (+ extensive UX polish)
 - **Phase 2 — This Week brief:** ✅ shipped
+- **Someday (long-term ideas):** 🟡 Phase A + B shipped (web + pipeline + menu-bar capture); in-browser/linked capture deferred (Phase 2)
 - **Phase 3 — Entities:** ⬜ not started
 - **Phase 4 — Ask-your-notes chat:** ⬜ not started
 - **Phase 5 — Reading & browse:** ⬜ not started
@@ -39,6 +40,44 @@ growing pile of notes into a live operating picture.
   identity settings, favicon): ✅ shipped
 
 ---
+
+## Someday — long-term ideas + review queue
+
+A place for ideas you want to keep but not act on yet, plus a triage queue for
+anything the extraction flags as "this might belong elsewhere." Symmetric model:
+a meeting trusts its to-dos (→ Action Center) and flags stray *ideas* for review;
+an idea session trusts its ideas (→ parked) and flags stray *to-dos* for review.
+Markdown stays the source of truth — flagged/parked items are checkbox lines
+tagged with an inline `<!-- someday: review|parked [idea|todo] -->` comment, so
+they never touch the Action Center buckets or counts.
+
+### Phase A — web + pipeline  ✅
+- [x] New `idea` meeting type in `prompts.json` (idea-shaped extraction; to-dos
+      flagged for review, never auto-filed).
+- [x] `someday_ideas` field added to all 6 meeting prompts → flagged for review.
+- [x] `output.py` renders flagged items as tagged review checkboxes (direction by
+      note type); live meeting to-dos unchanged.
+- [x] `notes_index.py` — parse/compose the someday tag, a `someday` bucket excluded
+      from Action Center stats, and triage ops: confirm-idea (park), confirm-to-do
+      (set owner+deadline → Action Center), dismiss (delete line).
+- [x] **Someday** web tab (`/someday`): Needs-review queue + parked ideas / idea
+      cards, with nav badge for the review count. Tests in `tests/test_someday.py`.
+- Idea capture today: `python -m src.cli process <audio> --type idea` (or `quick`).
+
+### Phase B — menu bar fast-follow  ✅
+- [x] "Record Idea" action in the menu bar (records, then `process-latest --type idea`).
+      A `CaptureMode` on `RecordingManager` tags the in-flight session; the dropdown
+      shows "Recording idea". Idle menu reads **Record Meeting / Record Idea**.
+      Rebuild the app to pick it up: `cd menubar && ./build.sh`.
+- [x] **Auto-detect for imports** — files with no capture mode (Process Audio File,
+      phone/watch-folder imports) run `process … --type auto`, which classifies the
+      transcript as meeting vs idea (`processor.classify_recording`) and routes it.
+      Explicit Record Meeting / Record Idea bypass it. Mis-guesses self-correct via
+      the review queue, so the classifier only needs to be roughly right.
+
+### Phase 2 — in-browser / linked capture  ⬜
+- [ ] Record straight from a Someday card ("Develop this idea"), linked back to the
+      origin idea (browser→capture bridge + `from_idea` frontmatter).
 
 ## Phase 1 — Action-item command center  ✅
 
