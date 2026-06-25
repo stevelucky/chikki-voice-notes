@@ -239,6 +239,18 @@ def test_delete_note_rejects_path_traversal(notes_env):
     assert ni.delete_note("../escape.md") is False
 
 
+def test_category_stamped_and_parsed_not_rendered_in_body(notes_env):
+    path = write_note({"title": "Bank Call", "summary": "s", "category": "Phone call",
+                       "_meeting_type": "default"},
+                      {"text": "t", "segments": [], "language": "en"},
+                      "recording_20260101_090000.wav", 0)
+    raw = open(path, encoding="utf-8").read()
+    assert 'category: "Phone call"' in raw
+    assert "## Category" not in raw           # it's frontmatter, not a body section
+    note = next(n for n in ni.load_notes() if n.filename == path.split("/")[-1])
+    assert note.category == "Phone call"
+
+
 def test_write_note_stamps_from_idea(notes_env):
     path = write_note({"title": "Kickoff", "summary": "s", "_meeting_type": "default"},
                       {"text": "t", "segments": [], "language": "en"},

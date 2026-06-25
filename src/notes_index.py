@@ -179,6 +179,7 @@ class Note:
     topics: list[str]
     duration: str
     body: str
+    category: str = ""   # LLM-inferred kind label (Phone call, Voice note, …)
     meta: dict = field(default_factory=dict)
 
 
@@ -228,6 +229,7 @@ def load_notes() -> list[Note]:
             topics=[str(t) for t in topics],
             duration=str(meta.get("duration", "")),
             body=body,
+            category=str(meta.get("category", "")),
             meta=meta if isinstance(meta, dict) else {},
         ))
     return notes
@@ -561,6 +563,38 @@ def note_by_filename(filename: str) -> "Note | None":
 def developed_sessions(idea_filename: str) -> list[Note]:
     """Notes recorded by developing the given idea (frontmatter from_idea → it)."""
     return [n for n in load_notes() if str(n.meta.get("from_idea") or "") == idea_filename]
+
+
+def set_category(filename: str, category: str) -> bool:
+    """Add/replace the `category` frontmatter line on a note (nothing else touched).
+    Non-destructive — preserves the body, checkmarks, merges, and inline notes."""
+    d = notes_dir()
+    path = os.path.normpath(os.path.join(d, filename))
+    if os.path.dirname(path) != os.path.normpath(d) or not os.path.isfile(path):
+        return False
+    cat = " ".join((category or "").split()).strip()
+    if not cat:
+        return False
+    quoted = json.dumps(cat, ensure_ascii=False)
+    lines = open(path, encoding="utf-8").read().split("\n")
+    if not lines or lines[0].strip() != "---":
+        return False
+    out, fences, done = [], 0, False
+    for line in lines:
+        if line.rstrip() == "---":
+            fences += 1
+            if fences == 2 and not done:
+                out.append(f"category: {quoted}")   # no existing line — add before close
+                done = True
+            out.append(line)
+            continue
+        if fences == 1 and not done and re.match(r"^category:\s", line):
+            out.append(f"category: {quoted}")        # replace existing
+            done = True
+            continue
+        out.append(line)
+    open(path, "w", encoding="utf-8").write("\n".join(out))
+    return True
 
 
 def set_archived(filename: str, archived: bool) -> bool:

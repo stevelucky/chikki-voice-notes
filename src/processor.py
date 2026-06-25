@@ -406,3 +406,30 @@ def classify_recording(transcript_text: str, max_chars: int = 4000) -> str:
     print("[classify] Detected: meeting", file=sys.stderr)
     return "meeting"
 
+
+_CATEGORY_SYSTEM = """You label what KIND of recording a transcript is.
+
+Reply with ONLY this JSON: {"category": "<label>"}.
+
+Choose the best short (1-3 word) label, preferring one of: Meeting, Phone call, Voice note, 1:1, Interview, Standup, Brainstorm. Use another short label only if none truly fit.
+Guidance: a customer-service or personal phone call → "Phone call"; a single-speaker memo or note-to-self → "Voice note"; a multi-person sync or discussion → "Meeting"."""
+
+
+def classify_category(text: str, max_chars: int = 3000) -> str:
+    """Infer a short 'kind of recording' label (Phone call, Meeting, Voice note, …)
+    for an existing note. Returns '' on empty input or any error, so a backfill
+    never mislabels on a hiccup."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    cfg = CONFIG["processing"]
+    try:
+        raw = _call_llm(cfg.get("provider", "gemini"), cfg["model"],
+                        _CATEGORY_SYSTEM, t[:max_chars], 0.0)
+        data = Processor._parse_json_response(raw)
+        if isinstance(data, dict):
+            return str(data.get("category", "")).strip()[:40]
+    except Exception as e:
+        print(f"[classify] category failed ({e})", file=sys.stderr)
+    return ""
+

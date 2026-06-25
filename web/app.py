@@ -283,6 +283,24 @@ def set_item_note(request: Request, filename: str = Form(...), line_no: int = Fo
     return templates.TemplateResponse(request, "_item.html", _row_ctx(item, bucket, q))
 
 
+@app.post("/action-items/delete", response_class=HTMLResponse)
+def delete_action_item(request: Request, filename: str = Form(...), line_no: int = Form(...),
+                       bucket: str = Form("mine"), q: str = Form("")):
+    """Delete a to-do outright (e.g. one created by mistake). Removes the line and
+    re-renders the list (deleting shifts line numbers, so a full re-render is required)."""
+    items = ni.action_items(include_done=True)
+    target = next((it for it in items
+                   if it.note_filename == filename and it.line_no == line_no), None)
+    # If it's a consolidated (merge-primary) row, un-merge the group first so the
+    # folded members don't get orphaned (left tagged with no primary to show them).
+    if target and target.merge_id and target.merge_primary:
+        for it in items:
+            if it.merge_id == target.merge_id and not (it.note_filename == filename and it.line_no == line_no):
+                ni.clear_merge(it.note_filename, it.line_no)
+    ni.dismiss_item(filename, line_no)
+    return _render_item_list(request, bucket, q)
+
+
 @app.get("/action-items/merge-candidates", response_class=HTMLResponse)
 def merge_candidates(request: Request, filename: str, line_no: int,
                      bucket: str = "mine", q: str = ""):
@@ -454,9 +472,17 @@ def _render_note(request: Request, filename: str, result: dict | None = None,
     else:
         back_href, back_label = ("/someday", "Someday") if (is_idea and not archived) else ("/notes", "All notes")
 
-    # Backlinks: an idea lists the sessions developed from it; a session links to
-    # the idea it came from.
-    developed = ni.developed_sessions(filename) if is_idea else []
+    # Backlinks: an idea lists the sessions developed from it (each with an inline,
+    # expandable preview so you can review prior work without leaving the page);
+    # a session links back to the idea it came from.
+    developed = []
+    if is_idea:
+        for s in ni.developed_sessions(filename):
+            note_part, _ = _split_note_body(s.body)
+            developed.append({
+                "filename": s.filename, "title": s.title, "date": s.date,
+                "preview_html": _render_md(note_part),
+            })
     origin = None
     fi = meta.get("from_idea")
     if fi:
@@ -567,6 +593,18 @@ async def idea_develop(filename: str = Form(...), audio: UploadFile = File(...))
 def note_title(request: Request, filename: str = Form(...), title: str = Form(...)):
     """Rename a note's displayed title (frontmatter + H1) and re-render the header."""
     ni.set_note_title(filename, title)
+    return _render_note_header(request, filename)
+
+
+@app.post("/note/category", response_class=HTMLResponse)
+def note_category(request: Request, filename: str = Form(...), category: str = Form("")):
+    """Re-tag a general note's category (frontmatter only) and re-render the header."""
+    if category.strip():
+        ni.set_category(filename, category)
+    return _render_note_header(request, filename)
+
+
+def _render_note_header(request: Request, filename: str) -> HTMLResponse:
     path = corr.resolve_note(filename)
     meta = {}
     if path:

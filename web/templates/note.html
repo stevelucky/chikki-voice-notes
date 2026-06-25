@@ -17,12 +17,22 @@
 
   {% if developed %}
   <div class="mb-5 rounded-xl border border-line bg-surface px-4 py-3">
-    <p class="font-mono text-[11px] uppercase tracking-[.1em] text-ink-faint mb-1.5">Developed into</p>
-    <ul class="space-y-1">
+    <p class="font-mono text-[11px] uppercase tracking-[.1em] text-ink-faint mb-1">Developed into</p>
+    <ul class="divide-y divide-line">
       {% for s in developed %}
-      <li class="flex items-baseline justify-between gap-3">
-        <a href="/note?file={{ s.filename | urlencode }}" class="text-sm text-ink hover:text-accent hover:underline truncate">{{ s.title }}</a>
-        <span class="font-mono text-xs text-ink-faint whitespace-nowrap">{{ s.date }}</span>
+      <li>
+        <details class="group">
+          {# Title links to the full session; clicking elsewhere on the row expands a preview. #}
+          <summary class="flex items-center justify-between gap-3 py-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+            <span class="flex items-center gap-1.5 min-w-0">
+              <svg class="shrink-0 text-ink-faint group-open:rotate-90 transition-transform" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+              <a href="/note?file={{ s.filename | urlencode }}" onclick="event.stopPropagation()"
+                 class="text-sm text-ink hover:text-accent hover:underline truncate">{{ s.title }}</a>
+            </span>
+            <span class="font-mono text-xs text-ink-faint whitespace-nowrap">{{ s.date }}</span>
+          </summary>
+          <div class="md mt-1 pt-2 pb-2 pl-[18px] border-t border-line/60">{{ s.preview_html | safe }}</div>
+        </details>
       </li>
       {% endfor %}
     </ul>
@@ -50,6 +60,9 @@
         <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
         Recording <span data-dev-timer class="font-mono">00:00</span>
       </span>
+      <span class="dev-eq inline-flex items-end gap-[2px] h-4 text-accent" title="Live input level" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i>
+      </span>
       <button type="button" onclick="scribeDevStop()" class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold">Stop &amp; process</button>
       <button type="button" onclick="scribeDevCancel()" class="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
     </div>
@@ -66,13 +79,28 @@
   </section>
   <script>
   (function(){
-    let rec, chunks = [], stream, timer, started;
+    let rec, chunks = [], stream, timer, started, audioCtx, analyser, eqRaf;
     function show(state){
       document.querySelectorAll('#develop-panel [data-dev]').forEach(el => {
         el.style.display = (el.getAttribute('data-dev') === state) ? '' : 'none';
       });
     }
+    function drawEq(){
+      const bars = document.querySelectorAll('#develop-panel .dev-eq i');
+      if (!analyser || !bars.length) return;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      const per = Math.max(1, Math.floor(data.length / bars.length));
+      bars.forEach((bar, i) => {
+        let sum = 0; for (let j = 0; j < per; j++) sum += data[i * per + j] || 0;
+        bar.style.height = Math.max(12, Math.min(100, (sum / per / 255) * 160)) + '%';
+      });
+      eqRaf = requestAnimationFrame(drawEq);
+    }
     function stopStream(){
+      if (eqRaf){ cancelAnimationFrame(eqRaf); eqRaf = null; }
+      if (audioCtx){ try { audioCtx.close(); } catch(e){} audioCtx = null; }
+      analyser = null;
       if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
       if (timer){ clearInterval(timer); timer = null; }
     }
@@ -83,6 +111,13 @@
       rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
       rec.onstop = upload;
       rec.start(); started = Date.now();
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64; analyser.smoothingTimeConstant = 0.7;
+        audioCtx.createMediaStreamSource(stream).connect(analyser);
+        drawEq();
+      } catch (e) { /* visualizer is optional */ }
       timer = setInterval(() => {
         const s = Math.floor((Date.now() - started) / 1000);
         const el = document.querySelector('#develop-panel [data-dev-timer]');

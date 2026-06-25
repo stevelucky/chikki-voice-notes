@@ -99,6 +99,9 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     lines.append(f"time: {time_str}")
     meeting_type = processed.get("_meeting_type", "default")
     lines.append(f"type: {meeting_type}")
+    category = processed.get("category")
+    if category:
+        lines.append(f"category: {_yaml_str(str(category))}")
     lines.append(f"transcript: {_yaml_str(os.path.basename(transcript_path))}")
     if duration:
         # duration may arrive as seconds (number) or a preformatted string (reprocess).
@@ -118,7 +121,7 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
     lines.append("")
 
     # Render all sections from the processed output dynamically
-    _SKIP_KEYS = {"title", "summary", "topics"}
+    _SKIP_KEYS = {"title", "summary", "topics", "category"}
 
     # Idea-session notes flag their (rare) action items for review rather than
     # dropping them straight into the Action Center — see the someday review queue.

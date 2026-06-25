@@ -21,6 +21,29 @@
             class="shrink-0 text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
   </form>
 </div>
-<p class="mt-2 font-mono text-xs text-ink-faint">
-  {{ meta.date }}{% if meta.time %} · {{ meta.time }}{% endif %}{% if meta.type and meta.type != 'default' %} · {{ meta.type }}{% endif %}{% if meta.duration %} · {{ meta.duration }}{% endif %}
-</p>
+{% set typed = meta.type and meta.type != 'default' %}
+<div class="mt-2 font-mono text-xs text-ink-faint flex flex-wrap items-center gap-x-1.5 gap-y-1">
+  <span>{{ meta.date }}{% if meta.time %} · {{ meta.time }}{% endif %} ·</span>
+  {% if typed %}
+  <span>{{ meta.type | replace('_', ' ') | title }}</span>
+  {% else %}
+  {# General notes carry an editable LLM-inferred category. Click to re-tag. #}
+  <span data-cat-display>
+    <button type="button" onclick="scribeStartCat(this)" title="Click to change category"
+            class="hover:text-accent transition-colors cursor-pointer {% if not meta.category %}italic{% endif %}">{{ meta.category or '+ category' }}</button>
+  </span>
+  <form data-cat-form style="display:none" class="inline-flex items-center gap-1.5"
+        hx-post="/note/category" hx-target="#note-header" hx-swap="innerHTML">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <input type="text" name="category" value="{{ meta.category or '' }}" list="scribe-cat-options" autocomplete="off" data-cat-input
+           class="w-32 rounded border border-line px-1.5 py-0.5 text-xs bg-surface text-ink focus:outline-none focus:ring-1 focus:ring-accent/40">
+    <button type="submit" class="btn-primary px-2 py-0.5 rounded text-[11px] font-semibold">Save</button>
+    <button type="button" onclick="scribeCancelCat(this)" class="text-ink-faint hover:text-ink transition-colors">Cancel</button>
+  </form>
+  {% endif %}
+  {% if meta.duration %}<span>· {{ meta.duration }}</span>{% endif %}
+  <datalist id="scribe-cat-options">
+    <option>Meeting</option><option>Phone call</option><option>Voice note</option>
+    <option>1:1</option><option>Interview</option><option>Standup</option><option>Brainstorm</option>
+  </datalist>
+</div>

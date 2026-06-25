@@ -1,4 +1,4 @@
-<li class="item-row flex items-start gap-3 px-4 py-3 hover:bg-paper/60 transition-colors
+<li class="item-row group flex items-start gap-3 px-4 py-3 hover:bg-paper/60 transition-colors
            {% if item and item.done and bucket == 'done' %}opacity-50{% endif %}"
     {% if item %}data-bucket="{{ item.bucket }}" data-key="{{ item.note_filename }}|{{ item.line_no }}"{% endif %}>
   {% if item %}
@@ -119,5 +119,15 @@
     {% endfor %}
     <option value="unassigned" {% if item.bucket == 'unassigned' %}selected{% endif %}>Unassigned</option>
   </select>
+
+  <button type="button" title="Delete to-do" aria-label="Delete to-do"
+          class="shrink-0 mt-0.5 p-1 rounded text-ink-faint hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          hx-post="/action-items/delete" hx-include="closest .item-row"
+          hx-target="#item-list" hx-swap="innerHTML"
+          hx-confirm="Delete this to-do? It will be removed from the note.">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6M10 11v6M14 11v6"/>
+    </svg>
+  </button>
   {% endif %}
 </li>

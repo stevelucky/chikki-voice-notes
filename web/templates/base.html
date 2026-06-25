@@ -93,6 +93,9 @@
     .spin { animation: scribe-spin .8s linear infinite; }
     @keyframes scribe-spin { to { transform: rotate(360deg); } }
 
+    /* Live input equalizer in the Develop-an-idea recorder. */
+    .dev-eq i { width: 2px; height: 15%; background: currentColor; border-radius: 1px; transition: height 90ms linear; }
+
     /* Hide the scrollbar on horizontally-scrollable strips (mobile tabs). */
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -355,6 +358,28 @@
       if (form) form.style.display = 'none';
       if (disp) disp.style.display = '';
       if (eb) eb.style.display = '';
+    }
+
+    // Inline category re-tag (general notes): swap the category label for an input.
+    function scribeStartCat(el) {
+      const root = el.closest('#note-header');
+      if (!root) return;
+      const disp = root.querySelector('[data-cat-display]');
+      const form = root.querySelector('[data-cat-form]');
+      if (disp) disp.style.display = 'none';
+      if (form) {
+        form.style.display = '';
+        const inp = form.querySelector('[data-cat-input]');
+        if (inp) { inp.focus(); inp.select(); }
+      }
+    }
+    function scribeCancelCat(el) {
+      const root = el.closest('#note-header');
+      if (!root) return;
+      const form = root.querySelector('[data-cat-form]');
+      const disp = root.querySelector('[data-cat-display]');
+      if (form) form.style.display = 'none';
+      if (disp) disp.style.display = '';
     }
 
     // Custom confirm modal — replaces native confirm().

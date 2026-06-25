@@ -8,8 +8,8 @@
   ] %}
   {% for key, href, label, path in items %}
   <a href="{{ href }}"
-     class="group relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-lg font-medium transition-colors
-            {% if nav == key %}text-accent{% else %}text-ink-soft hover:text-ink hover:bg-line/50{% endif %}"
+     class="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-lg font-medium transition-colors
+            {% if nav == key %}bg-accent-tint text-accent ring-1 ring-accent/15{% else %}text-ink-soft hover:text-ink hover:bg-line/50{% endif %}"
      {% if nav == key %}aria-current="page"{% endif %} aria-label="{{ label }}">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -19,15 +19,12 @@
     {% if key == 'actions' %}
     <span data-open-count style="display:none"
           class="ml-0.5 min-w-[1.1rem] text-center text-[11px] font-mono font-medium rounded-full px-1
-                 {% if nav == key %}bg-accent-tint text-accent{% else %}bg-line text-ink-soft{% endif %}"></span>
+                 {% if nav == key %}bg-accent text-paper{% else %}bg-line text-ink-soft{% endif %}"></span>
     {% endif %}
     {% if key == 'someday' %}
     <span data-someday-count style="display:none"
           class="ml-0.5 min-w-[1.1rem] text-center text-[11px] font-mono font-medium rounded-full px-1
-                 {% if nav == key %}bg-accent-tint text-accent{% else %}bg-line text-ink-soft{% endif %}"></span>
-    {% endif %}
-    {% if nav == key %}
-    <span class="absolute left-2.5 right-2.5 -bottom-px h-0.5 rounded-full bg-accent"></span>
+                 {% if nav == key %}bg-accent text-paper{% else %}bg-line text-ink-soft{% endif %}"></span>
     {% endif %}
   </a>
   {% endfor %}

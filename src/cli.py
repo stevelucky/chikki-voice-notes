@@ -754,6 +754,43 @@ def cleanup_audio():
     click.echo(click.style(f"Deleted {n} audio file(s) older than {days} days.", fg="yellow"), err=True)
 
 
+@cli.command("retag")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
+@click.option("--all", "force_all", is_flag=True,
+              help="Re-tag even notes that already have a category")
+def retag(yes, force_all):
+    """Infer a category (Phone call, Meeting, Voice note, …) for existing notes.
+
+    Non-destructive: only adds/updates the `category` frontmatter line — your
+    checked-off items, merges, reassignments, and notes are untouched. Targets
+    general (type: default) notes that lack a category; idea/standup/etc. keep
+    their own label.
+    """
+    from . import notes_index as ni
+    from .corrections import _load_transcript
+    from .processor import classify_category
+
+    notes = ni.load_notes()
+    targets = [n for n in notes
+               if (n.type or "default") in ("", "default") and (force_all or not n.category)]
+    if not targets:
+        click.echo("Nothing to tag — all general notes already have a category.", err=True)
+        return
+    if not yes:
+        click.confirm(f"Classify and tag {len(targets)} note(s)? (one quick LLM call each)", abort=True)
+
+    done = 0
+    for n in targets:
+        base = n.filename[:-3] if n.filename.endswith(".md") else n.filename
+        tr = _load_transcript(base)
+        text = (tr.get("text") if tr else "") or n.body
+        cat = classify_category(text)
+        if cat and ni.set_category(n.filename, cat):
+            done += 1
+            click.echo(f"  {cat:<12} ← {n.title[:54]}", err=True)
+    click.echo(click.style(f"\nTagged {done} of {len(targets)} note(s).", fg="green"), err=True)
+
+
 @cli.command("reprocess-all")
 @click.option("--type", "-t", "force_type", default=None,
               help="Force this meeting type for all notes (default: keep each note's type)")
