@@ -282,7 +282,9 @@ def transcribe(audio_path, engine):
               help="Meeting type: default, idea, standup, strategy, one_on_one, brainstorm, interview. "
                    "Use 'auto' to detect meeting vs idea from the audio.")
 @click.option("--diarize/--no-diarize", default=None, help="Enable speaker diarization")
-def process(audio_path, context, slack, engine, meeting_type, diarize):
+@click.option("--from-idea", "from_idea", default=None,
+              help="Link this note back to a Someday idea (its note filename).")
+def process(audio_path, context, slack, engine, meeting_type, diarize, from_idea):
     """Transcribe and process an audio file into structured notes."""
     import json as _json
     import sys as _sys
@@ -338,7 +340,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize):
 
     stage("saving")
     with live_timer("Saving note + compressing audio"):
-        note_path = write_note(processed, transcript, audio_path, audio_dur)
+        note_path = write_note(processed, transcript, audio_path, audio_dur, from_idea=from_idea)
         _compress_audio(audio_path)
         _prune_old_audio()
 

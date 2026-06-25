@@ -9,14 +9,18 @@ Run from the repo root:
 Then open http://localhost:8000
 """
 
+import asyncio
 import os
 import re
+import shutil
+import sys
+import tempfile
 from collections import OrderedDict
 from datetime import date, datetime
 
 import markdown as _md
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -25,6 +29,7 @@ from src import brief as brief_mod
 from src import corrections as corr
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_HERE)
 _STATIC = os.path.join(_HERE, "static")
 templates = Jinja2Templates(directory=os.path.join(_HERE, "templates"))
 
@@ -429,9 +434,20 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
             except OSError:
                 diff = None
 
-    # Breadcrumb: idea notes belong to Someday; everything else to All Notes.
+    # Breadcrumb: a live idea note belongs to Someday; archived ideas and every
+    # other note belong to All Notes.
     is_idea = str(meta.get("type", "")).lower() == "idea"
-    back_href, back_label = ("/someday", "Someday") if is_idea else ("/notes", "All notes")
+    archived = bool(meta.get("archived"))
+    back_href, back_label = ("/someday", "Someday") if (is_idea and not archived) else ("/notes", "All notes")
+
+    # Backlinks: an idea lists the sessions developed from it; a session links to
+    # the idea it came from.
+    developed = ni.developed_sessions(filename) if is_idea else []
+    origin = None
+    fi = meta.get("from_idea")
+    if fi:
+        on = ni.note_by_filename(str(fi))
+        origin = {"filename": str(fi), "title": on.title if on else str(fi)}
 
     return templates.TemplateResponse(request, "note.html", {
         "nav": "",
@@ -445,6 +461,10 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
         "diff": diff,
         "back_href": back_href,
         "back_label": back_label,
+        "is_idea": is_idea,
+        "archived": archived,
+        "developed": developed,
+        "origin": origin,
     })
 
 
@@ -477,6 +497,54 @@ def note_delete(filename: str = Form(...)):
             target = "/someday"
     ni.delete_note(filename)
     return RedirectResponse(target, status_code=303)
+
+
+@app.post("/note/archive")
+def note_archive(filename: str = Form(...), archived: bool = Form(True)):
+    """Archive an idea (leaves Someday, stays in All Notes) or restore it."""
+    ni.set_archived(filename, archived)
+    # After archiving go to All Notes; after restoring, back to Someday.
+    return RedirectResponse("/notes" if archived else "/someday", status_code=303)
+
+
+@app.post("/idea/develop")
+async def idea_develop(filename: str = Form(...), audio: UploadFile = File(...)):
+    """Record-in-browser → develop a Someday idea into an actionable session note.
+
+    Saves the uploaded audio, runs the normal pipeline as a subprocess (default
+    type → real to-dos) linked back to the idea via --from-idea, and returns the
+    new note's filename for the browser to navigate to.
+    """
+    if corr.resolve_note(filename) is None:
+        return JSONResponse({"ok": False, "error": "Idea not found."}, status_code=400)
+
+    suffix = os.path.splitext(audio.filename or "")[1] or ".webm"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        shutil.copyfileobj(audio.file, tmp)
+        tmp.close()
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "src.cli", "process", tmp.name,
+            "--type", "default", "--from-idea", filename, "--no-slack",
+            cwd=_PROJECT_ROOT,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            tail = (err.decode(errors="replace").strip().splitlines() or ["Processing failed."])
+            # surface the last non-JSON-marker line as the human error
+            msg = next((l for l in reversed(tail) if not l.lstrip().startswith("{")), tail[-1])
+            return JSONResponse({"ok": False, "error": msg}, status_code=500)
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    sessions = ni.developed_sessions(filename)
+    if not sessions:
+        return JSONResponse({"ok": False, "error": "Processed, but couldn't locate the new note."}, status_code=500)
+    return JSONResponse({"ok": True, "note": sessions[0].filename})
 
 
 @app.post("/note/title", response_class=HTMLResponse)

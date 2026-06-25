@@ -239,6 +239,42 @@ def test_delete_note_rejects_path_traversal(notes_env):
     assert ni.delete_note("../escape.md") is False
 
 
+def test_write_note_stamps_from_idea(notes_env):
+    path = write_note({"title": "Kickoff", "summary": "s", "_meeting_type": "default"},
+                      {"text": "t", "segments": [], "language": "en"},
+                      "recording_20260102_100000.wav", 0, from_idea="20260101_0900_Idea.md")
+    assert 'from_idea: "20260101_0900_Idea.md"' in open(path, encoding="utf-8").read()
+
+
+def test_developed_sessions_links_idea_to_session(notes_env):
+    idea = write_note({"title": "Idea", "summary": "s", "_meeting_type": "idea"},
+                      {"text": "t", "segments": [], "language": "en"},
+                      "recording_20260101_090000.wav", 0)
+    idea_fn = idea.split("/")[-1]
+    sess = write_note({"title": "Session", "summary": "s", "_meeting_type": "default"},
+                      {"text": "t", "segments": [], "language": "en"},
+                      "recording_20260102_100000.wav", 0, from_idea=idea_fn)
+    sess_fn = sess.split("/")[-1]
+    assert [n.filename for n in ni.developed_sessions(idea_fn)] == [sess_fn]
+    assert ni.note_by_filename(sess_fn).meta.get("from_idea") == idea_fn
+
+
+def test_archive_hides_from_someday_keeps_in_all_notes(notes_env):
+    idea = write_note({"title": "Shelved", "summary": "s", "_meeting_type": "idea"},
+                      {"text": "t", "segments": [], "language": "en"},
+                      "recording_20260101_090000.wav", 0)
+    fn = idea.split("/")[-1]
+    assert len(ni.idea_notes()) == 1
+
+    assert ni.set_archived(fn, True)
+    assert ni.idea_notes() == []                                   # gone from Someday
+    assert fn in [n.filename for n in ni.load_notes()]             # still in All Notes
+    assert len(ni.idea_notes(include_archived=True)) == 1
+
+    assert ni.set_archived(fn, False)                              # restore
+    assert len(ni.idea_notes()) == 1
+
+
 def test_delete_note_unmerges_groups_so_other_items_survive(notes_env):
     a = _write_simple_note("Note A", "recording_20260101_090000.wav", task="shared A")
     b = _write_simple_note("Note B", "recording_20260102_090000.wav", task="shared B")

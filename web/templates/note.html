@@ -7,6 +7,112 @@
     {% include "_note_header.html" %}
   </div>
 
+  {% if origin %}
+  <a href="/note?file={{ origin.filename | urlencode }}"
+     class="inline-flex items-center gap-1.5 mb-5 text-xs text-ink-soft hover:text-accent transition-colors">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M8.5 14a5.5 5.5 0 1 1 7 0c-.7.55-1 1.2-1 2h-5c0-.8-.3-1.45-1-2Z"/></svg>
+    Developed from idea: <span class="font-medium">{{ origin.title }}</span>
+  </a>
+  {% endif %}
+
+  {% if developed %}
+  <div class="mb-5 rounded-xl border border-line bg-surface px-4 py-3">
+    <p class="font-mono text-[11px] uppercase tracking-[.1em] text-ink-faint mb-1.5">Developed into</p>
+    <ul class="space-y-1">
+      {% for s in developed %}
+      <li class="flex items-baseline justify-between gap-3">
+        <a href="/note?file={{ s.filename | urlencode }}" class="text-sm text-ink hover:text-accent hover:underline truncate">{{ s.title }}</a>
+        <span class="font-mono text-xs text-ink-faint whitespace-nowrap">{{ s.date }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if is_idea and not archived %}
+  <section id="develop-panel" class="mb-7 bg-surface rounded-2xl border border-line p-5">
+    <h2 class="font-mono text-[11px] uppercase tracking-[.12em] text-accent mb-2">Develop this idea</h2>
+    <p class="text-xs text-ink-soft mb-3 leading-relaxed">
+      Ready to move on it? Record yourself talking through how you'd actually do this — it becomes a
+      working note with real to-dos in the Action Center, linked back to this idea.
+    </p>
+    <input type="hidden" id="develop-filename" value="{{ filename }}">
+
+    <div data-dev="idle">
+      <button type="button" onclick="scribeDevStart()"
+              class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-accent text-white text-sm font-semibold shadow-sm hover:bg-accent-hover transition-colors">
+        <span class="inline-block w-2 h-2 rounded-full bg-white"></span> Develop this idea
+      </button>
+    </div>
+
+    <div data-dev="recording" style="display:none" class="flex flex-wrap items-center gap-3">
+      <span class="inline-flex items-center gap-2 text-sm text-ink">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+        Recording <span data-dev-timer class="font-mono">00:00</span>
+      </span>
+      <button type="button" onclick="scribeDevStop()" class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold">Stop &amp; process</button>
+      <button type="button" onclick="scribeDevCancel()" class="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+    </div>
+
+    <div data-dev="processing" style="display:none" class="flex items-center gap-2 text-sm text-ink-soft">
+      <svg class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+      Processing your idea — transcribing &amp; extracting to-dos…
+    </div>
+
+    <div data-dev="error" style="display:none" class="text-sm text-red-600 dark:text-red-400">
+      <span data-dev-err></span>
+      <button type="button" onclick="scribeDevReset()" class="ml-2 underline hover:no-underline">Try again</button>
+    </div>
+  </section>
+  <script>
+  (function(){
+    let rec, chunks = [], stream, timer, started;
+    function show(state){
+      document.querySelectorAll('#develop-panel [data-dev]').forEach(el => {
+        el.style.display = (el.getAttribute('data-dev') === state) ? '' : 'none';
+      });
+    }
+    function stopStream(){
+      if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+      if (timer){ clearInterval(timer); timer = null; }
+    }
+    window.scribeDevStart = async function(){
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch(e){ return window.scribeDevErr('Microphone access was blocked. Allow mic access for localhost, then try again.'); }
+      chunks = []; rec = new MediaRecorder(stream);
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = upload;
+      rec.start(); started = Date.now();
+      timer = setInterval(() => {
+        const s = Math.floor((Date.now() - started) / 1000);
+        const el = document.querySelector('#develop-panel [data-dev-timer]');
+        if (el) el.textContent = String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+      }, 500);
+      show('recording');
+    };
+    window.scribeDevStop = function(){ if (timer){ clearInterval(timer); timer = null; } if (rec && rec.state !== 'inactive') rec.stop(); show('processing'); };
+    window.scribeDevCancel = function(){ if (rec && rec.state !== 'inactive'){ rec.onstop = null; rec.stop(); } stopStream(); chunks = []; show('idle'); };
+    window.scribeDevErr = function(msg){ const e = document.querySelector('#develop-panel [data-dev-err]'); if (e) e.textContent = msg; show('error'); };
+    window.scribeDevReset = function(){ show('idle'); };
+    async function upload(){
+      stopStream();
+      if (!chunks.length){ return window.scribeDevErr('No audio was captured.'); }
+      const type = (rec && rec.mimeType) || 'audio/webm';
+      const ext = type.indexOf('mp4') >= 0 ? 'mp4' : (type.indexOf('ogg') >= 0 ? 'ogg' : 'webm');
+      const fd = new FormData();
+      fd.append('filename', document.getElementById('develop-filename').value);
+      fd.append('audio', new Blob(chunks, { type }), 'develop.' + ext);
+      try {
+        const r = await fetch('/idea/develop', { method: 'POST', body: fd });
+        const data = await r.json();
+        if (data.ok && data.note) { window.location = '/note?file=' + encodeURIComponent(data.note); }
+        else { window.scribeDevErr(data.error || 'Processing failed.'); }
+      } catch(e){ window.scribeDevErr('Upload failed: ' + e.message); }
+    }
+  })();
+  </script>
+  {% endif %}
+
   {% if result %}
     {% if result.ok %}
     <div class="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300 px-4 py-3 text-sm">
@@ -100,10 +206,21 @@
   </details>
   {% endif %}
 
-  <form method="post" action="/note/delete" class="mt-8 pt-4 border-t border-line"
-        data-confirm="Move this note to trash? It’s removed from Scribe but recoverable from the notes/.trash folder. The transcript and audio are kept.">
-    <input type="hidden" name="filename" value="{{ filename }}">
-    <button type="submit" class="font-mono text-[11px] text-ink-faint hover:text-red-600 transition-colors">Delete note</button>
-  </form>
+  <div class="mt-8 pt-4 border-t border-line flex items-center gap-5">
+    {% if is_idea %}
+    <form method="post" action="/note/archive">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <input type="hidden" name="archived" value="{{ 'false' if archived else 'true' }}">
+      <button type="submit" class="font-mono text-[11px] text-ink-faint hover:text-accent transition-colors">
+        {{ 'Restore to Someday' if archived else 'Archive idea' }}
+      </button>
+    </form>
+    {% endif %}
+    <form method="post" action="/note/delete"
+          data-confirm="Move this note to trash? It’s removed from Scribe but recoverable from the notes/.trash folder. The transcript and audio are kept.">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <button type="submit" class="font-mono text-[11px] text-ink-faint hover:text-red-600 transition-colors">Delete note</button>
+    </form>
+  </div>
 
 {% endblock %}

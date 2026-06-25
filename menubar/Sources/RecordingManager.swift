@@ -309,7 +309,8 @@ class RecordingManager: ObservableObject {
 
     private func renderRecordingIcon() {
         statusIcon.image = Self.makeRecordingPillIcon(
-            time: formattedTime, bands: currentBands, warning: isSilent())
+            time: formattedTime, bands: currentBands, warning: isSilent(),
+            idea: captureMode == .idea)
     }
 
     /// Filenames of *.wav currently in the recordings folder.
@@ -904,9 +905,12 @@ class RecordingManager: ObservableObject {
         p.waitUntilExit()
     }
 
-    static func makeRecordingPillIcon(time: String, bands: [Float] = [], warning: Bool = false) -> NSImage {
-        // Amber when the input has gone quiet (likely dead/muted mic), else red.
-        let fill = warning ? Color(red: 0.92, green: 0.58, blue: 0.0) : Color.red
+    static func makeRecordingPillIcon(time: String, bands: [Float] = [], warning: Bool = false,
+                                      idea: Bool = false) -> NSImage {
+        // Amber when the input has gone quiet (likely dead/muted mic); otherwise
+        // blue for an idea session and red for a meeting.
+        let fill = warning ? Color(red: 0.92, green: 0.58, blue: 0.0)
+                           : (idea ? Color(red: 0.18, green: 0.45, blue: 0.85) : Color.red)
         let view = ZStack {
             Capsule().fill(fill)
             HStack(spacing: 4) {

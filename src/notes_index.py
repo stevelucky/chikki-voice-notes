@@ -542,9 +542,52 @@ def someday_items(state: str = "", include_done: bool = False) -> list[ActionIte
     return out
 
 
-def idea_notes() -> list[Note]:
-    """Notes captured as dedicated idea sessions (frontmatter type == 'idea')."""
-    return [n for n in load_notes() if (n.type or "").lower() == "idea"]
+def idea_notes(include_archived: bool = False) -> list[Note]:
+    """Dedicated idea-session notes (frontmatter type == 'idea'). Archived ideas
+    are hidden from Someday by default but remain in All Notes."""
+    out = [n for n in load_notes() if (n.type or "").lower() == "idea"]
+    if not include_archived:
+        out = [n for n in out if not n.meta.get("archived")]
+    return out
+
+
+def note_by_filename(filename: str) -> "Note | None":
+    for n in load_notes():
+        if n.filename == filename:
+            return n
+    return None
+
+
+def developed_sessions(idea_filename: str) -> list[Note]:
+    """Notes recorded by developing the given idea (frontmatter from_idea → it)."""
+    return [n for n in load_notes() if str(n.meta.get("from_idea") or "") == idea_filename]
+
+
+def set_archived(filename: str, archived: bool) -> bool:
+    """Set/unset the `archived` frontmatter flag on a note. Archiving an idea
+    removes it from Someday while leaving it in All Notes; restoring brings it back.
+    """
+    d = notes_dir()
+    path = os.path.normpath(os.path.join(d, filename))
+    if os.path.dirname(path) != os.path.normpath(d) or not os.path.isfile(path):
+        return False
+    lines = open(path, encoding="utf-8").read().split("\n")
+    if not lines or lines[0].strip() != "---":
+        return False
+    out, fences, done = [], 0, False
+    for line in lines:
+        if line.rstrip() == "---":
+            fences += 1
+            if fences == 2 and archived and not done:
+                out.append("archived: true")   # add just before the closing fence
+                done = True
+            out.append(line)
+            continue
+        if fences == 1 and re.match(r"^archived:\s", line):
+            continue  # drop any existing flag (re-added above if still archiving)
+        out.append(line)
+    open(path, "w", encoding="utf-8").write("\n".join(out))
+    return True
 
 
 def confirm_idea(filename: str, line_no: int) -> bool:

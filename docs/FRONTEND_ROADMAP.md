@@ -32,7 +32,7 @@ growing pile of notes into a live operating picture.
 
 - **Phase 1 — Action Center:** ✅ shipped (+ extensive UX polish)
 - **Phase 2 — This Week brief:** ✅ shipped
-- **Someday (long-term ideas):** 🟡 Phase A + B shipped (web + pipeline + menu-bar capture); in-browser/linked capture deferred (Phase 2)
+- **Someday (long-term ideas):** ✅ shipped — capture, review queue, menu-bar modes + auto-infer, develop-in-browser, and archive
 - **Phase 3 — Entities:** ⬜ not started
 - **Phase 4 — Ask-your-notes chat:** ⬜ not started
 - **Phase 5 — Reading & browse:** ⬜ not started
@@ -75,9 +75,17 @@ they never touch the Action Center buckets or counts.
       Explicit Record Meeting / Record Idea bypass it. Mis-guesses self-correct via
       the review queue, so the classifier only needs to be roughly right.
 
-### Phase 2 — in-browser / linked capture  ⬜
-- [ ] Record straight from a Someday card ("Develop this idea"), linked back to the
-      origin idea (browser→capture bridge + `from_idea` frontmatter).
+### Phase 2 — in-browser / linked capture  ✅
+- [x] **Develop this idea** — record straight in the browser (MediaRecorder on the
+      idea's note page) → upload to `/idea/develop`, which runs the normal pipeline
+      as a subprocess (`process --type default --from-idea <origin>`) → a working
+      note with real to-dos in the Action Center, linked back to the idea.
+- [x] **Backlinks** both directions: the idea lists "Developed into → sessions";
+      each session shows "Developed from idea → …" (resolved via `from_idea`).
+- [x] **Archive / Restore** an idea — `archived` frontmatter flag removes it from
+      Someday while keeping it in All Notes (distinct from Delete → trash); reversible.
+- Needs a browser mic grant (one-time) and a dashboard restart to pick up the new
+  routes. Optional later: a quick "Develop" / "developed" badge on the Someday card.
 
 ## Phase 1 — Action-item command center  ✅
 

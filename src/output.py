@@ -52,11 +52,12 @@ def _format_duration(seconds: float) -> str:
 
 
 def write_note(processed: dict, transcript: dict, audio_path: str, duration: float = 0,
-               *, base_name: str = None, timestamp=None) -> str:
+               *, base_name: str = None, timestamp=None, from_idea: str = None) -> str:
     """Write a structured markdown note + raw transcript. Returns the note filepath.
 
     base_name / timestamp let callers (e.g. reprocess-all) overwrite an existing
     note in place, preserving its filename and date instead of deriving new ones.
+    from_idea links this note back to the Someday idea it was developed from.
     """
     notes_dir = CONFIG["output"]["notes_dir"]
     os.makedirs(notes_dir, exist_ok=True)
@@ -104,6 +105,8 @@ def write_note(processed: dict, transcript: dict, audio_path: str, duration: flo
         dur_str = duration if isinstance(duration, str) else _format_duration(duration)
         lines.append(f"duration: {_yaml_str(dur_str)}")
     lines.append(f"audio: {_yaml_str(os.path.basename(audio_path))}")
+    if from_idea:
+        lines.append(f"from_idea: {_yaml_str(from_idea)}")
     lines.append(f"topics: {json.dumps(processed.get('topics', []))}")
     lines.append("---")
     lines.append("")
