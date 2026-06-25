@@ -178,7 +178,7 @@
     </div>
   </header>
 
-  <main class="max-w-3xl mx-auto px-5 py-8 sm:py-10">
+  <main class="max-w-3xl mx-auto px-5 pt-5 sm:pt-6 pb-8 sm:pb-10">
     {% block content %}{% endblock %}
   </main>
 
@@ -332,13 +332,14 @@
     // Inline note-title rename: swap the title for an input where it sits.
     // Toggle via inline style.display — an author `.flex { display:flex }` rule
     // beats the `hidden` attribute, so the attribute alone wouldn't hide the form.
-    function scribeStartRename(btn) {
-      const root = btn.closest('#note-header');
+    function scribeStartRename(el) {
+      const root = el.closest('#note-header');
       if (!root) return;
       const disp = root.querySelector('[data-title-display]');
+      const eb = root.querySelector('[data-title-editbtn]');
       const form = root.querySelector('[data-title-form]');
       if (disp) disp.style.display = 'none';
-      btn.style.display = 'none';
+      if (eb) eb.style.display = 'none';
       if (form) {
         form.style.display = 'flex';
         const inp = form.querySelector('[data-title-input]');

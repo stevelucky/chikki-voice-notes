@@ -79,7 +79,7 @@
       <div class="mt-1.5 pl-2.5 border-l-2 border-accent-tint text-xs text-ink-soft space-y-1">
         <div>{{ item.text }} <span class="text-ink-faint">· {{ item.note_title }} (this)</span></div>
         {% for s in item.sources %}
-        <div>{{ s.text }} <span class="text-ink-faint">· <a class="hover:text-accent hover:underline" href="/note?file={{ s.note_filename | urlencode }}">{{ s.note_title }}</a></span></div>
+        <div>{{ s.text }} <span class="text-ink-faint">· <a class="hover:text-accent hover:underline" href="/note?file={{ s.note_filename | urlencode }}&from=actions">{{ s.note_title }}</a></span></div>
         {% endfor %}
         <button type="button" class="mt-1 text-[11px] text-ink-faint hover:text-red-600 transition-colors"
                 hx-post="/action-items/unmerge" hx-include="closest .item-row"

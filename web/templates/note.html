@@ -171,6 +171,7 @@
       </p>
       <form method="post" action="/note/correct">
         <input type="hidden" name="filename" value="{{ filename }}">
+        <input type="hidden" name="from" value="{{ origin_from }}">
         <textarea name="correction" rows="3" required
                   placeholder="e.g. I'm the host of this meeting, not Dwight. Dwight is the client I was meeting with — swap the attribution everywhere."
                   class="w-full rounded-lg border border-line px-3 py-2 text-sm bg-paper/40
@@ -187,6 +188,7 @@
       {% if has_backup %}
       <form method="post" action="/note/undo" class="mt-3 pt-3 border-t border-line">
         <input type="hidden" name="filename" value="{{ filename }}">
+        <input type="hidden" name="from" value="{{ origin_from }}">
         <button type="submit" class="font-mono text-[11px] text-ink-faint hover:text-ink transition-colors">
           ↩ Undo last correction
         </button>

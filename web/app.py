@@ -19,7 +19,7 @@ from collections import OrderedDict
 from datetime import date, datetime
 
 import markdown as _md
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -414,7 +414,17 @@ def _diff_rows(before: str, after: str) -> list[dict]:
     return rows
 
 
-def _render_note(request: Request, filename: str, result: dict | None = None):
+# Maps a `from` entry-point key to the breadcrumb back-link (href, label).
+_FROM_MAP = {
+    "brief": ("/", "This Week"),
+    "notes": ("/notes", "All notes"),
+    "someday": ("/someday", "Someday"),
+    "actions": ("/actions", "Action Center"),
+}
+
+
+def _render_note(request: Request, filename: str, result: dict | None = None,
+                 origin_from: str = ""):
     path = corr.resolve_note(filename)
     if not path:
         return HTMLResponse("Note not found.", status_code=404)
@@ -434,11 +444,15 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
             except OSError:
                 diff = None
 
-    # Breadcrumb: a live idea note belongs to Someday; archived ideas and every
-    # other note belong to All Notes.
+    # Breadcrumb: honor where the user came from (`from` param) when known; else
+    # fall back to type — a live idea note belongs to Someday, everything else to
+    # All Notes.
     is_idea = str(meta.get("type", "")).lower() == "idea"
     archived = bool(meta.get("archived"))
-    back_href, back_label = ("/someday", "Someday") if (is_idea and not archived) else ("/notes", "All notes")
+    if origin_from in _FROM_MAP:
+        back_href, back_label = _FROM_MAP[origin_from]
+    else:
+        back_href, back_label = ("/someday", "Someday") if (is_idea and not archived) else ("/notes", "All notes")
 
     # Backlinks: an idea lists the sessions developed from it; a session links to
     # the idea it came from.
@@ -461,6 +475,7 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
         "diff": diff,
         "back_href": back_href,
         "back_label": back_label,
+        "origin_from": origin_from if origin_from in _FROM_MAP else "",
         "is_idea": is_idea,
         "archived": archived,
         "developed": developed,
@@ -469,21 +484,22 @@ def _render_note(request: Request, filename: str, result: dict | None = None):
 
 
 @app.get("/note", response_class=HTMLResponse)
-def note_detail(request: Request, file: str):
-    return _render_note(request, file)
+def note_detail(request: Request, file: str, origin: str = Query("", alias="from")):
+    return _render_note(request, file, origin_from=origin)
 
 
 @app.post("/note/correct", response_class=HTMLResponse)
-def note_correct(request: Request, filename: str = Form(...), correction: str = Form(...)):
+def note_correct(request: Request, filename: str = Form(...), correction: str = Form(...),
+                 origin: str = Form("", alias="from")):
     res = corr.correct_note(filename, correction)
-    return _render_note(request, filename, result=res)
+    return _render_note(request, filename, result=res, origin_from=origin)
 
 
 @app.post("/note/undo", response_class=HTMLResponse)
-def note_undo(request: Request, filename: str = Form(...)):
+def note_undo(request: Request, filename: str = Form(...), origin: str = Form("", alias="from")):
     ok = corr.undo(filename)
     res = {"ok": ok, "undo": True} if ok else {"ok": False, "error": "Nothing to undo."}
-    return _render_note(request, filename, result=res)
+    return _render_note(request, filename, result=res, origin_from=origin)
 
 
 @app.post("/note/delete")
