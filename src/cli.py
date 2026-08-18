@@ -216,6 +216,7 @@ def record(duration, output, meter):
     from .recorder import Recorder
 
     on_level = None
+    on_state = None
     if meter:
         def on_level(bands):
             # One compact JSON object per line on stdout; the menu bar parses these
@@ -226,7 +227,16 @@ def record(duration, output, meter):
             except (BrokenPipeError, ValueError, OSError):
                 pass
 
-    rec = Recorder(output_path=output, on_level=on_level)
+        def on_state(paused, reason):
+            # Pause-state transitions (silence auto-pause / manual pause); the menu
+            # bar reads these to reflect a paused recording.
+            try:
+                sys.stdout.write(_json.dumps({"paused": bool(paused), "reason": reason}) + "\n")
+                sys.stdout.flush()
+            except (BrokenPipeError, ValueError, OSError):
+                pass
+
+    rec = Recorder(output_path=output, on_level=on_level, on_state=on_state)
     rec.start()
     click.echo(click.style("Recording... ", fg="red", bold=True) + "Press Ctrl+C to stop.")
 
@@ -238,6 +248,12 @@ def record(duration, output, meter):
         stopped.set()
 
     old_handler = signal.signal(signal.SIGINT, handle_stop)
+    # SIGUSR1 toggles a deliberate pause (sent by the menu bar's Pause/Resume).
+    old_usr1 = None
+    try:
+        old_usr1 = signal.signal(signal.SIGUSR1, lambda s, f: rec.toggle_manual_pause())
+    except (ValueError, OSError, AttributeError):
+        pass
 
     try:
         while not stopped.is_set():
@@ -250,6 +266,11 @@ def record(duration, output, meter):
             stopped.wait(0.5)
     finally:
         signal.signal(signal.SIGINT, old_handler)
+        if old_usr1 is not None:
+            try:
+                signal.signal(signal.SIGUSR1, old_usr1)
+            except (ValueError, OSError):
+                pass
 
     click.echo(err=True)
     filepath = rec.stop()

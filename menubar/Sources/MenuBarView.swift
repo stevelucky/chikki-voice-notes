@@ -9,16 +9,22 @@ struct MenuBarView: View {
             if recorder.isRecording {
                 HStack {
                     Circle()
-                        .fill(.red)
+                        .fill(recorder.isPaused ? Color.gray : .red)
                         .frame(width: 8, height: 8)
                     // Live elapsed time is shown in the menu-bar icon itself; keeping
                     // it out of the dropdown means this menu never re-renders while
                     // open, so hover highlighting stays stable.
-                    Text(recorder.captureMode == .idea ? "Recording idea" : "Recording")
+                    Text(recorder.isPaused
+                         ? recorder.pauseStatusText
+                         : (recorder.captureMode == .idea ? "Recording idea" : "Recording"))
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .allowsHitTesting(false)
+
+                Button(recorder.isPaused ? "Resume Recording" : "Pause Recording") {
+                    recorder.togglePause()
+                }
 
                 Button("Stop Recording") {
                     Task { await recorder.stopRecording() }

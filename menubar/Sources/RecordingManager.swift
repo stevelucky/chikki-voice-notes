@@ -71,6 +71,11 @@ class RecordingManager: ObservableObject {
     // Only changes on start/stop (a real state change), so it's safe on the
     // dropdown's @Published graph alongside isRecording.
     @Published var captureMode: CaptureMode = .meeting
+    // Paused state (silence auto-pause or a manual pause). Changes infrequently,
+    // so it's fine on the dropdown's @Published graph.
+    @Published var isPaused = false
+    private var pauseReason = ""    // "silent" | "manual" | "recording"
+    var pauseStatusText: String { pauseReason == "silent" ? "Paused (silent)" : "Paused" }
     @Published var lastNote: String?
     @Published var isProcessing = false
     @Published var processingStage: String = ""  // raw stage key from Python
@@ -210,6 +215,8 @@ class RecordingManager: ObservableObject {
         recordProcess = proc
 
         isRecording = true
+        isPaused = false
+        pauseReason = ""
         elapsedSeconds = 0
 
         // Per-second updates go to statusIcon only (not the dropdown's @Published graph).
@@ -276,11 +283,37 @@ class RecordingManager: ObservableObject {
     nonisolated private func handleMeterLine(_ line: String) {
         guard line.hasPrefix("{"),
               let data = line.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let arr = obj["lvl"] as? [Any] else { return }
-        let bands = arr.compactMap { ($0 as? NSNumber)?.floatValue }
-        guard !bands.isEmpty else { return }
-        Task { @MainActor [weak self] in self?.updateMeter(bands) }
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if let arr = obj["lvl"] as? [Any] {
+            let bands = arr.compactMap { ($0 as? NSNumber)?.floatValue }
+            if !bands.isEmpty { Task { @MainActor [weak self] in self?.updateMeter(bands) } }
+            return
+        }
+        if let paused = obj["paused"] as? Bool {
+            let reason = obj["reason"] as? String ?? ""
+            Task { @MainActor [weak self] in self?.updatePauseState(paused, reason: reason) }
+        }
+    }
+
+    /// Apply a pause-state transition from the recorder. Notifies once when the
+    /// recording auto-pauses on silence so the user isn't surprised by the gap.
+    private func updatePauseState(_ paused: Bool, reason: String) {
+        guard isRecording else { return }
+        let wasPaused = isPaused
+        isPaused = paused
+        pauseReason = reason
+        renderRecordingIcon()
+        if paused && !wasPaused && reason == "silent" {
+            sendNotification(title: "Scribe",
+                             body: "Recording paused — the room went quiet. It resumes as soon as you speak.")
+        }
+    }
+
+    /// Toggle a deliberate pause by signalling the recorder (SIGUSR1). The recorder
+    /// echoes the new state back on stdout, which updates the UI.
+    func togglePause() {
+        guard isRecording, let proc = recordProcess, proc.isRunning else { return }
+        kill(proc.processIdentifier, SIGUSR1)
     }
 
     /// Apply new band levels: track silence and repaint the icon (throttled).
@@ -308,9 +341,13 @@ class RecordingManager: ObservableObject {
     }
 
     private func renderRecordingIcon() {
-        statusIcon.image = Self.makeRecordingPillIcon(
-            time: formattedTime, bands: currentBands, warning: isSilent(),
-            idea: captureMode == .idea)
+        if isPaused {
+            statusIcon.image = Self.makePausedPillIcon(time: formattedTime)
+        } else {
+            statusIcon.image = Self.makeRecordingPillIcon(
+                time: formattedTime, bands: currentBands, warning: isSilent(),
+                idea: captureMode == .idea)
+        }
     }
 
     /// Filenames of *.wav currently in the recordings folder.
@@ -346,6 +383,8 @@ class RecordingManager: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRecording = false
+        isPaused = false
+        pauseReason = ""
         endSleepAssertion()
 
         // Signal Python and wait for it to flush the WAV to disk before processing
@@ -380,6 +419,8 @@ class RecordingManager: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRecording = false
+        isPaused = false
+        pauseReason = ""
         endSleepAssertion()
 
         if let proc, proc.isRunning {
@@ -903,6 +944,29 @@ class RecordingManager: ObservableObject {
         p.arguments = ["-f", "src.cli record"]
         try? p.run()
         p.waitUntilExit()
+    }
+
+    /// A muted pill with a pause glyph, shown while the recording is paused
+    /// (silence auto-pause or a manual pause).
+    static func makePausedPillIcon(time: String) -> NSImage {
+        let view = ZStack {
+            Capsule().fill(Color(red: 0.42, green: 0.42, blue: 0.45))
+            HStack(spacing: 4) {
+                HStack(spacing: 2) {
+                    Capsule().fill(Color.white).frame(width: 2.5, height: 10)
+                    Capsule().fill(Color.white).frame(width: 2.5, height: 10)
+                }
+                Text(time)
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundColor(.white)
+            }
+        }
+        .frame(width: 74, height: 20)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2.0
+        let img = renderer.nsImage ?? NSImage()
+        img.isTemplate = false
+        return img
     }
 
     static func makeRecordingPillIcon(time: String, bands: [Float] = [], warning: Bool = false,
