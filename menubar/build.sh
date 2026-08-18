@@ -43,6 +43,18 @@ mkdir -p build/Scribe.app/Contents/Resources
 cp "$BINARY" build/Scribe.app/Contents/MacOS/Scribe
 cp Sources/Info.plist build/Scribe.app/Contents/Info.plist
 
+# Stamp the build so Settings can show exactly which build is running. Set
+# CFBundleVersion to a build timestamp and record the git commit (with a "+" if
+# the tree had uncommitted changes). Done before signing so the seal covers it.
+PLIST="build/Scribe.app/Contents/Info.plist"
+BUILD_STAMP="$(date +%Y%m%d.%H%M)"
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+git diff --quiet 2>/dev/null || GIT_COMMIT="${GIT_COMMIT}+"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_STAMP" "$PLIST" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Add :ScribeGitCommit string $GIT_COMMIT" "$PLIST" >/dev/null 2>&1 \
+  || /usr/libexec/PlistBuddy -c "Set :ScribeGitCommit $GIT_COMMIT" "$PLIST" >/dev/null 2>&1 || true
+echo "Stamped build $BUILD_STAMP ($GIT_COMMIT)"
+
 # Copy app icon
 cp Scribe.icns build/Scribe.app/Contents/Resources/
 cp mic_idle.png mic_idle@2x.png build/Scribe.app/Contents/Resources/
