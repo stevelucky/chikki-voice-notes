@@ -293,6 +293,34 @@ class RecordingManager: ObservableObject {
         if let paused = obj["paused"] as? Bool {
             let reason = obj["reason"] as? String ?? ""
             Task { @MainActor [weak self] in self?.updatePauseState(paused, reason: reason) }
+            return
+        }
+        if let capped = obj["capped"] as? Bool, capped {
+            let limit = (obj["limit_min"] as? NSNumber)?.intValue ?? 0
+            Task { @MainActor [weak self] in self?.handleCapReached(limitMin: limit) }
+        }
+    }
+
+    /// The recorder self-stopped at its max-duration cap. Notify the user and
+    /// process what was captured — don't interrupt (it's already finishing), just
+    /// wait for it to exit, then run the pipeline, so nothing is silently lost.
+    private func handleCapReached(limitMin: Int) {
+        guard isRecording else { return }
+        let limitText = (limitMin > 0 && limitMin % 60 == 0) ? "\(limitMin / 60)-hour"
+                      : (limitMin > 0 ? "\(limitMin)-minute" : "maximum")
+        sendNotification(title: "Scribe",
+                         body: "Recording hit the \(limitText) limit and stopped. Saving what was recorded — start a new recording to keep going.")
+        let proc = recordProcess
+        recordProcess = nil
+        timer?.invalidate(); timer = nil
+        isRecording = false
+        isPaused = false
+        pauseReason = ""
+        endSleepAssertion()
+        recordingsAtStart = []
+        Task { @MainActor in
+            if let proc, proc.isRunning { await Self.waitForExit(proc, timeout: 20) }
+            await processLatest()
         }
     }
 

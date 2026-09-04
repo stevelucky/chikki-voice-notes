@@ -313,6 +313,14 @@ def record(duration, output, meter):
             click.echo(f"\r  {m:02d}:{s:02d}", nl=False, err=True)
             if cap and elapsed >= cap:
                 click.echo(f"\n[recorder] Reached max duration ({cap}s) — stopping.", err=True)
+                if meter:
+                    # Tell the menu bar the recording hit its cap, so it can notify
+                    # the user and process the file instead of appearing to record on.
+                    try:
+                        sys.stdout.write(_json.dumps({"capped": True, "limit_min": cap // 60}) + "\n")
+                        sys.stdout.flush()
+                    except (BrokenPipeError, ValueError, OSError):
+                        pass
                 break
             stopped.wait(0.5)
     finally:
