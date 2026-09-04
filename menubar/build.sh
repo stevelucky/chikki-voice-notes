@@ -78,10 +78,21 @@ echo "Built: $(pwd)/build/Scribe.app"
 if [ "${1:-}" = "--install" ]; then
     pkill -x Scribe 2>/dev/null || true
     pkill -f "src.cli record" 2>/dev/null || true
-    sleep 0.3
+    # Wait for the old instance to fully exit before relaunching — opening too soon
+    # after the kill fails with a transient launchd/RunningBoard error (the old job
+    # is still being reaped).
+    for _ in $(seq 1 25); do pgrep -x Scribe >/dev/null 2>&1 || break; sleep 0.2; done
+    sleep 0.5
     cp -r build/Scribe.app /Applications/
     echo "Installed to /Applications/Scribe.app"
-    open /Applications/Scribe.app
+    # The first spawn right after replacing a running app can still transiently
+    # fail; retry a few times, and don't fail the build if the launch doesn't take.
+    opened=""
+    for _ in 1 2 3; do
+        if open /Applications/Scribe.app 2>/dev/null; then opened=1; break; fi
+        sleep 1
+    done
+    [ -n "$opened" ] || echo "note: couldn't auto-launch (transient) — open /Applications/Scribe.app yourself."
 fi
 
 echo ""
