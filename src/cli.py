@@ -42,6 +42,40 @@ def _resolve_auto_type(meeting_type, transcript_text):
     return "idea" if classify_recording(transcript_text) == "idea" else "default"
 
 
+def _fmt_secs(secs) -> str:
+    secs = int(max(0, secs))
+    m, s = divmod(secs, 60)
+    if m >= 60:
+        h, m = divmod(m, 60)
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _make_transcribe_progress(stage_fn):
+    """A throttled 0–1 progress callback that emits `transcribing` stage markers
+    with a percentage and a rough ETA (extrapolated from elapsed time). The menu
+    bar reads these to fill a real progress bar."""
+    state = {"t0": time.time(), "last": 0.0}
+
+    def cb(frac):
+        now = time.time()
+        if frac < 0.999 and now - state["last"] < 0.8:  # throttle chatter
+            return
+        state["last"] = now
+        frac = max(0.0, min(1.0, frac))
+        pct = int(frac * 100)
+        elapsed = now - state["t0"]
+        if frac > 0.03:
+            detail = f"{pct}% · ~{_fmt_secs(elapsed / frac - elapsed)} left"
+        else:
+            detail = f"{pct}% · estimating…"
+        stage_fn("transcribing", detail, pct=pct)
+
+    return cb
+
+
 def _apply_diarization(transcript, audio_path):
     """Diarize + identify speakers and merge into the transcript. Non-fatal: on any
     failure (e.g. a GPU out-of-memory on a very long meeting) it warns and returns
@@ -350,7 +384,7 @@ def process(audio_path, context, slack, engine, meeting_type, diarize, from_idea
     t = Transcriber(engine=engine)
     stage("transcribing", f"{dur_str} audio")
     with live_timer(f"Transcribing ({engine_name}, {dur_str} audio)"):
-        transcript = t.transcribe(audio_path)
+        transcript = t.transcribe(audio_path, progress=_make_transcribe_progress(stage))
 
     with live_timer("Cleaning transcript"):
         transcript = clean_transcript(transcript)
@@ -624,7 +658,7 @@ def process_latest(engine, diarize, meeting_type):
 
     t0 = time.time()
     t = Transcriber(engine=engine)
-    transcript = t.transcribe(audio_path)
+    transcript = t.transcribe(audio_path, progress=_make_transcribe_progress(stage))
     
     transcript = clean_transcript(transcript)
     

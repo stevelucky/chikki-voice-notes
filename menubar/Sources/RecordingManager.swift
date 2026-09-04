@@ -81,6 +81,7 @@ class RecordingManager: ObservableObject {
     @Published var processingStage: String = ""  // raw stage key from Python
     @Published var processingDetail: String = ""
     @Published var completedStages: Set<String> = []
+    @Published var transcribeProgress: Double = -1  // 0…1 during transcription; -1 = indeterminate
     @Published var projectDir: String
     @Published var llmProvider: String = "LLM"
     @Published var lastError: String?
@@ -617,6 +618,7 @@ class RecordingManager: ObservableObject {
         processingStage = ""
         processingDetail = ""
         completedStages = []
+        transcribeProgress = -1
         lastError = nil
         statusIcon.image = ScribeApp.processingPillIcon
 
@@ -709,6 +711,7 @@ class RecordingManager: ObservableObject {
 
         let detail = obj["detail"] as? String ?? ""
         let note = obj["note"] as? String
+        let pct = (obj["pct"] as? NSNumber)?.doubleValue
         Task { @MainActor [weak self] in
             guard let self else { return }
             // The "done" marker carries the saved note's filename so we can offer
@@ -721,6 +724,9 @@ class RecordingManager: ObservableObject {
             if stage == "done" { self.completedStages.insert("saving") }
             self.processingStage = stage
             self.processingDetail = detail
+            // Real transcription progress (parakeet); other stages stay indeterminate.
+            if stage == "transcribing", let pct { self.transcribeProgress = pct / 100.0 }
+            else if stage != "transcribing" { self.transcribeProgress = -1 }
         }
     }
 

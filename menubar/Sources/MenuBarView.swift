@@ -56,7 +56,8 @@ struct MenuBarView: View {
 
                     ProcessingStepView(
                         label: "Transcribing audio",
-                        state: recorder.stepState(for: "transcribing")
+                        state: recorder.stepState(for: "transcribing"),
+                        progress: recorder.transcribeProgress
                     )
                     ProcessingStepView(
                         label: "Extracting notes (\(recorder.llmProvider))",
@@ -195,9 +196,28 @@ enum StepState {
 struct ProcessingStepView: View {
     let label: String
     let state: StepState
+    var progress: Double = -1   // 0…1 shows a real bar; -1 = indeterminate (icon only)
+
+    private var showsBar: Bool { state == .active && progress >= 0 }
 
     var body: some View {
-        stateIcon + Text("  \(label)").font(.caption)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 0) {
+                (stateIcon + Text("  \(label)")).font(.caption)
+                if showsBar {
+                    Spacer(minLength: 8)
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if showsBar {
+                ProgressView(value: min(max(progress, 0), 1))
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .padding(.leading, 16)
+            }
+        }
     }
 
     private var stateIcon: Text {
