@@ -4,6 +4,13 @@ import KeyboardShortcuts
 struct MenuBarView: View {
     @EnvironmentObject var recorder: RecordingManager
 
+    private var showTranscribeBar: Bool {
+        recorder.stepState(for: "transcribing") == .active && recorder.transcribeProgress >= 0
+    }
+    private var transcribeBarValue: Double {
+        min(max(recorder.transcribeProgress, 0), 1)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if recorder.isRecording {
@@ -56,8 +63,7 @@ struct MenuBarView: View {
 
                     ProcessingStepView(
                         label: "Transcribing audio",
-                        state: recorder.stepState(for: "transcribing"),
-                        progress: recorder.transcribeProgress
+                        state: recorder.stepState(for: "transcribing")
                     )
                     ProcessingStepView(
                         label: "Extracting notes (\(recorder.llmProvider))",
@@ -67,6 +73,15 @@ struct MenuBarView: View {
                         label: "Saving & exporting",
                         state: recorder.stepState(for: "saving")
                     )
+
+                    // One real progress bar (transcription only — the sole step with
+                    // determinate progress). Reserve its height even when hidden so
+                    // menu items below don't shift as it appears/disappears.
+                    ProgressView(value: transcribeBarValue)
+                        .progressViewStyle(.linear)
+                        .controlSize(.small)
+                        .opacity(showTranscribeBar ? 1 : 0)
+                        .frame(height: 4)
 
                     // Always render this row (even when empty) at a fixed height.
                     // If it toggled in/out, every menu item below it would shift by
@@ -196,28 +211,9 @@ enum StepState {
 struct ProcessingStepView: View {
     let label: String
     let state: StepState
-    var progress: Double = -1   // 0…1 shows a real bar; -1 = indeterminate (icon only)
-
-    private var showsBar: Bool { state == .active && progress >= 0 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 0) {
-                (stateIcon + Text("  \(label)")).font(.caption)
-                if showsBar {
-                    Spacer(minLength: 8)
-                    Text("\(Int((progress * 100).rounded()))%")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if showsBar {
-                ProgressView(value: min(max(progress, 0), 1))
-                    .progressViewStyle(.linear)
-                    .controlSize(.small)
-                    .padding(.leading, 16)
-            }
-        }
+        (stateIcon + Text("  \(label)")).font(.caption)
     }
 
     private var stateIcon: Text {
