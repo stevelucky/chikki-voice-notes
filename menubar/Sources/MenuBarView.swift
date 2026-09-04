@@ -67,7 +67,8 @@ struct MenuBarView: View {
                     )
                     ProcessingStepView(
                         label: "Extracting notes (\(recorder.llmProvider))",
-                        state: recorder.stepState(for: "processing")
+                        state: recorder.stepState(for: "processing"),
+                        trailing: recorder.stepState(for: "processing") == .active ? recorder.stageElapsedText : ""
                     )
                     ProcessingStepView(
                         label: "Saving & exporting",
@@ -211,9 +212,13 @@ enum StepState {
 struct ProcessingStepView: View {
     let label: String
     let state: StepState
+    var trailing: String = ""   // e.g. an elapsed timer on the active step
 
     var body: some View {
-        (stateIcon + Text("  \(label)")).font(.caption)
+        (stateIcon
+         + Text("  \(label)")
+         + (trailing.isEmpty ? Text("") : Text("  ·  \(trailing)").foregroundColor(.secondary))
+        ).font(.caption)
     }
 
     private var stateIcon: Text {

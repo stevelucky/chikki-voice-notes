@@ -82,6 +82,12 @@ class RecordingManager: ObservableObject {
     @Published var processingDetail: String = ""
     @Published var completedStages: Set<String> = []
     @Published var transcribeProgress: Double = -1  // 0…1 during transcription; -1 = indeterminate
+    @Published var stageElapsed: Int = 0            // seconds spent in the current processing stage
+    private var stageStartedAt: Date?
+    private var processingTimer: Timer?
+    var stageElapsedText: String {
+        String(format: "%d:%02d", stageElapsed / 60, stageElapsed % 60)
+    }
     @Published var projectDir: String
     @Published var llmProvider: String = "LLM"
     @Published var lastError: String?
@@ -650,11 +656,23 @@ class RecordingManager: ObservableObject {
         lastError = nil
         statusIcon.image = ScribeApp.processingPillIcon
 
+        // Tick a per-stage elapsed clock so steps without a determinate percentage
+        // (e.g. the single Claude call) still show forward motion.
+        stageStartedAt = Date()
+        stageElapsed = 0
+        processingTimer?.invalidate()
+        processingTimer = Self.makeCommonModeTimer(interval: 1) { [weak self] in
+            guard let self, let started = self.stageStartedAt else { return }
+            self.stageElapsed = Int(Date().timeIntervalSince(started))
+        }
+
         let capturedProjectDir = projectDir
         let (output, exitCode, stderrLog) = await Task.detached { [self] in
             return self.runSubprocessWithProgress(cmd: cmd, projectDir: capturedProjectDir)
         }.value
 
+        processingTimer?.invalidate()
+        processingTimer = nil
         isProcessing = false
         statusIcon.image = ScribeApp.idleMicIcon
 
@@ -750,6 +768,10 @@ class RecordingManager: ObservableObject {
                 for i in 0..<idx { self.completedStages.insert(stageOrder[i]) }
             }
             if stage == "done" { self.completedStages.insert("saving") }
+            if self.processingStage != stage {   // new stage → restart its elapsed clock
+                self.stageStartedAt = Date()
+                self.stageElapsed = 0
+            }
             self.processingStage = stage
             self.processingDetail = detail
             // Real transcription progress (parakeet); other stages stay indeterminate.
