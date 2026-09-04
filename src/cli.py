@@ -42,6 +42,23 @@ def _resolve_auto_type(meeting_type, transcript_text):
     return "idea" if classify_recording(transcript_text) == "idea" else "default"
 
 
+def _apply_diarization(transcript, audio_path):
+    """Diarize + identify speakers and merge into the transcript. Non-fatal: on any
+    failure (e.g. a GPU out-of-memory on a very long meeting) it warns and returns
+    the transcript unchanged — so the note is still produced, just without speaker
+    labels, rather than losing the whole recording."""
+    try:
+        from .diarizer import Diarizer, identify_and_merge
+        from .config import _BASE_DIR
+        d = Diarizer()
+        speaker_segments = d.diarize(audio_path)
+        return identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
+    except Exception as e:
+        print(f"[diarizer] Skipping diarization ({type(e).__name__}: {e}) — the note "
+              f"will have no speaker labels.", file=sys.stderr)
+        return transcript
+
+
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
@@ -340,13 +357,9 @@ def process(audio_path, context, slack, engine, meeting_type, diarize, from_idea
 
     do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
     if do_diarize:
-        from .diarizer import Diarizer, identify_and_merge
-        from .config import _BASE_DIR
         stage("diarizing", "Running pyannote pipeline...")
         with live_timer("Diarizing speakers"):
-            d = Diarizer()
-            speaker_segments = d.diarize(audio_path)
-            transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
+            transcript = _apply_diarization(transcript, audio_path)
 
     if meeting_type == "auto":
         stage("classifying", "Detecting meeting vs idea")
@@ -456,12 +469,8 @@ def quick(context, slack, duration, engine, meeting_type, length, diarize):
 
     do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
     if do_diarize:
-        from .diarizer import Diarizer, identify_and_merge
-        from .config import _BASE_DIR
         with live_timer("Diarizing speakers"):
-            d = Diarizer()
-            speaker_segments = d.diarize(audio_path)
-            transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
+            transcript = _apply_diarization(transcript, audio_path)
 
     p = Processor(meeting_type=meeting_type)
     _strategy = _resolve_length(length, transcript.get("segments"))
@@ -622,11 +631,7 @@ def process_latest(engine, diarize, meeting_type):
     do_diarize = diarize if diarize is not None else CONFIG.get("transcription", {}).get("diarization", {}).get("enabled", False)
     if do_diarize:
         stage("diarizing", "Running pyannote pipeline...")
-        from .diarizer import Diarizer, identify_and_merge
-        from .config import _BASE_DIR
-        d = Diarizer()
-        speaker_segments = d.diarize(audio_path)
-        transcript = identify_and_merge(transcript, speaker_segments, audio_path, _BASE_DIR)
+        transcript = _apply_diarization(transcript, audio_path)
         
     t1 = time.time()
 
